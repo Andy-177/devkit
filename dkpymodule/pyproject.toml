@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devkit"
+dynamic = ["version"]
+description = "配方(repice.json)驱动的构建工作流工具"
+requires-python = ">=3.10"
+dependencies = [
+    "loguru>=0.7",
+    "dulwich>=0.21",
+    "littledl>=1.0",
+]
+
+[project.scripts]
+devkit = "devkit.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "devkit._version.__version__" }

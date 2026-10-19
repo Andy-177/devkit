@@ -1,0 +1,22 @@
+{
+  "material": {
+    "repo": "https://example.com/demo.git",
+    "depth": 1
+  },
+  "download": [
+    "https://example.com/tool.zip"
+  ],
+  "data": ["build.sh"],
+  "jobs": {
+    "main": {
+      "steps": {
+        "call-hello": {
+          "call": { "hello.json": ["world"] }
+        },
+        "banner": {
+          "run": [["echo", "build start"]]
+        }
+      }
+    }
+  }
+}
