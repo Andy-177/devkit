@@ -3,6 +3,7 @@
 用法::
 
     devkit build repice.json               # 执行配方
+    devkit run repice.json                 # build 的别名，等价
     devkit build bon/repice.json -w build  # 指定工作目录
     devkit build repice.json -j build-windows --dry-run
     devkit system                        # 打印当前系统标识
@@ -64,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"devkit {__version__}")
     subparsers = parser.add_subparsers(dest="command")
 
-    build = subparsers.add_parser("build", help="执行一个配方")
+    build = subparsers.add_parser("build", aliases=["run"], help="执行一个配方（run 是别名）")
     _add_run_arguments(build)
 
     system = subparsers.add_parser("system", help="打印当前检测到的系统标识")
@@ -111,7 +112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
     # 允许省略 build 子命令: devkit repice.json
-    known = {"build", "system", "-h", "--help", "--version"}
+    known = {"build", "run", "system", "-h", "--help", "--version"}
     if argv and argv[0] not in known and not argv[0].startswith("-"):
         argv.insert(0, "build")
 

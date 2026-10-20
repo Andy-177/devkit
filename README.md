@@ -19,6 +19,7 @@
 
 ```text
 devkit build repice.json                # 执行配方
+devkit run repice.json                  # build 的别名，完全等价
 devkit build bon/repice.json -w build   # 指定工作区
 devkit build repice.json -j build-windows --dry-run
 devkit repice.json                      # 省略 build 也行

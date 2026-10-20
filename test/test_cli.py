@@ -64,6 +64,20 @@ class TestParser(CliTestCase):
         self.assertTrue(args.dry_run)
         self.assertEqual(args.job, ["a"])
 
+    def test_run_is_build_alias(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "x.json", "--dry-run"])
+        self.assertEqual(args.command, "run")
+        self.assertEqual(args.recipe, "x.json")
+        self.assertTrue(args.dry_run)
+
+    def test_help_lists_run_alias(self):
+        out = io.StringIO()
+        with self.assertRaises(SystemExit) as ctx:
+            with contextlib.redirect_stdout(out):
+                main(["--help"])
+        self.assertIn("run", out.getvalue())
+
     def test_system_command(self):
         code, out, _ = self.run_cli(["system"])
         self.assertEqual(code, 0)
@@ -89,6 +103,24 @@ class TestRunCommand(CliTestCase):
             "s": {"run": [echo_write("x.txt")]}},
         )
         code, _, _ = self.run_cli([str(path), "-w", str(self.workdir), "--dry-run"])
+        self.assertEqual(code, 0)
+
+    def test_run_alias_executes_recipe(self):
+        path = simple_recipe(self.tmp, steps={
+            "s": {"run": [echo_write("ok.txt", "fine")]}},
+        )
+        code, _, _ = self.run_cli(["run", str(path), "-w", str(self.workdir),
+                                   "-d", str(self.workdir / "dl")])
+        self.assertEqual(code, 0)
+        self.assertEqual((self.workdir / "ok.txt").read_text(
+            encoding="utf-8", errors="replace").strip(), "fine")
+
+    def test_run_alias_not_eaten_by_auto_insert(self):
+        """run 在省略子命令的白名单里，不会被误插 build。"""
+        path = simple_recipe(self.tmp, steps={
+            "s": {"run": [echo_write("x.txt")]}},
+        )
+        code, _, _ = self.run_cli(["run", str(path), "-w", str(self.workdir), "--dry-run"])
         self.assertEqual(code, 0)
 
     def test_successful_run_returns_0(self):
