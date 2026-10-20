@@ -1,4 +1,4 @@
-"""配方文件(repice.json)的加载与校验。
+"""配方文件(recipe.json)的加载与校验。
 
 配方是一个 JSON 文件，所有字段都是可选的::
 
@@ -149,7 +149,7 @@ from loguru import logger
 from devkit.errors import RecipeError
 
 #: 目录形式的配方路径会依次尝试这些文件名
-RECIPE_NAMES = ("repice.json", "recipe.json")
+RECIPE_NAMES = ("recipe.json",)
 
 #: ``step.next`` 为 null（结束本作业、继续下一个作业）时用它表示
 NEXT_JOB = ""
@@ -275,7 +275,7 @@ class Recipe:
 def resolve_recipe_path(path: str | Path) -> Path:
     """把用户给出的路径解析成具体的配方文件路径。
 
-    目录的话依次尝试 ``repice.json`` / ``recipe.json``。
+    目录的话找 ``recipe.json``。
     """
     p = Path(path).expanduser()
     if p.is_dir():

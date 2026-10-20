@@ -30,7 +30,7 @@ PY_SPACED = " " in sys.executable
 IS_WIN = sys.platform == "win32"
 
 
-def write_recipe(directory: Path, raw: dict, name: str = "repice.json") -> Path:
+def write_recipe(directory: Path, raw: dict, name: str = "recipe.json") -> Path:
     """把 dict 写成 JSON 配方文件，返回路径。"""
     path = directory / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,7 +84,7 @@ def echo_write(name: str, text: str = "x") -> list[str]:
 
 
 def simple_recipe(tmp: Path, *, steps: dict, jobs_extra: dict | None = None,
-                  data: list | None = None, name: str = "repice.json") -> Path:
+                  data: list | None = None, name: str = "recipe.json") -> Path:
     """单作业配方：jobs = {"main": {"steps": steps, **jobs_extra}}。"""
     job_body: dict = {"steps": steps}
     if jobs_extra:
@@ -102,4 +102,4 @@ def raw_step(**body) -> dict:
 
 def dummy(path: Path | None = None) -> tuple[Recipe, Step]:
     """给需要 Recipe/Step 参数的底层函数用的占位对象。"""
-    return Recipe(path=path or Path("repice.json")), Step(name="s")
+    return Recipe(path=path or Path("recipe.json")), Step(name="s")

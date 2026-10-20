@@ -344,19 +344,19 @@ class TestCall(RunnerTestCase):
         # 无 material 的被调用配方与父配方共用工作区
         self.assertEqual(_common.read(self.workdir / "child.txt"), "hello-arg")
 
-    def test_call_directory_finds_repice_json(self):
+    def test_call_directory_finds_recipe_json(self):
         sub = self.tmp / "sub"
         write_recipe(sub, {
             "jobs": {"print": {"steps": {"s": {
                 "run": [["echo", "from-dir", ">", "dirchild.txt"]]}}}},
-        }, "repice.json")
+        }, "recipe.json")
         path = simple_recipe(self.tmp, steps={"s": {"call": {"sub": []}}})
         run_recipe(path, self.workdir)
         self.assertEqual(_common.read(self.workdir / "dirchild.txt"), "from-dir")
 
     def test_call_cycle_detected(self):
         path = write_recipe(self.tmp, {
-            "jobs": {"main": {"steps": {"s": {"call": {"repice.json": []}}}}},
+            "jobs": {"main": {"steps": {"s": {"call": {"recipe.json": []}}}}},
         })
         runner = make_runner(self.workdir)
         with self.assertRaisesRegex(RecipeError, "循环"):

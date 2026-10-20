@@ -35,12 +35,14 @@ class TestResolveRecipePath(unittest.TestCase):
         self.assertEqual(resolve_recipe_path(path), path)
         self.assertEqual(resolve_recipe_path(str(path)), path)
 
-    def test_directory_tries_repice_then_recipe(self):
-        write_recipe(self.tmp, {}, "repice.json")
-        self.assertEqual(resolve_recipe_path(self.tmp).name, "repice.json")
-        (self.tmp / "repice.json").unlink()
+    def test_directory_finds_recipe_json(self):
         write_recipe(self.tmp, {}, "recipe.json")
         self.assertEqual(resolve_recipe_path(self.tmp).name, "recipe.json")
+
+    def test_directory_ignores_other_json_names(self):
+        write_recipe(self.tmp, {}, "repice.json")
+        with self.assertRaisesRegex(RecipeError, "没有找到"):
+            resolve_recipe_path(self.tmp)
 
     def test_directory_without_recipe(self):
         with self.assertRaisesRegex(RecipeError, "没有找到"):
@@ -63,17 +65,17 @@ class TestLoadRecipe(unittest.TestCase):
         self.tmp = Path(self._td.name)
         self.addCleanup(self._td.cleanup)
 
-    def _load(self, raw: dict, name: str = "repice.json") -> Recipe:
+    def _load(self, raw: dict, name: str = "recipe.json") -> Recipe:
         return load_recipe(write_recipe(self.tmp, raw, name))
 
     def test_invalid_json(self):
-        p = self.tmp / "repice.json"
+        p = self.tmp / "recipe.json"
         p.write_text("{ not json", encoding="utf-8")
         with self.assertRaisesRegex(RecipeError, "合法 JSON"):
             load_recipe(p)
 
     def test_top_level_must_be_object(self):
-        p = self.tmp / "repice.json"
+        p = self.tmp / "recipe.json"
         p.write_text("[1, 2]", encoding="utf-8")
         with self.assertRaisesRegex(RecipeError, "顶层必须是 JSON 对象"):
             load_recipe(p)
@@ -96,7 +98,7 @@ class TestLoadRecipe(unittest.TestCase):
         self.assertIsInstance(recipe, Recipe)
 
     def test_bom_tolerated(self):
-        p = self.tmp / "repice.json"
+        p = self.tmp / "recipe.json"
         p.write_text(json.dumps({"data": ["x"]}), encoding="utf-8-sig")
         self.assertEqual(load_recipe(p).data, ("x",))
 

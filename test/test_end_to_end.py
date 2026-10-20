@@ -13,7 +13,7 @@ from pathlib import Path
 from _common import ROOT
 
 CLI = ROOT / "devkit" / "cli.py"
-REPO_RECIPE = ROOT / "example" / "repice.json"
+REPO_RECIPE = ROOT / "example" / "recipe.json"
 HELLO_RECIPE = ROOT / "example" / "hello.json"
 
 
@@ -61,7 +61,7 @@ class TestRepoRecipes(unittest.TestCase):
             self.skipTest(f"缺少示例配方 {path.relative_to(ROOT)}")
 
     def test_repo_recipe_dry_run(self):
-        """example/repice.json: dry-run 全流程（克隆/下载/步骤/call 全部演练）。"""
+        """example/recipe.json: dry-run 全流程（克隆/下载/步骤/call 全部演练）。"""
         self._require(REPO_RECIPE)
         with tempfile.TemporaryDirectory() as td:
             proc = run_cli("build", str(REPO_RECIPE), "--dry-run",

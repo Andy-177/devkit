@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "devkit"
 dynamic = ["version"]
-description = "配方(repice.json)驱动的构建工作流工具"
+description = "配方(recipe.json)驱动的构建工作流工具"
 requires-python = ">=3.10"
 dependencies = [
     "loguru>=0.7",

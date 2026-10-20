@@ -2,10 +2,10 @@
 
 用法::
 
-    devkit build repice.json               # 执行配方
-    devkit run repice.json                 # build 的别名，等价
-    devkit build bon/repice.json -w build  # 指定工作目录
-    devkit build repice.json -j build-windows --dry-run
+    devkit build recipe.json               # 执行配方
+    devkit run recipe.json                 # build 的别名，等价
+    devkit build bon/recipe.json -w build  # 指定工作目录
+    devkit build recipe.json -j build-windows --dry-run
     devkit system                        # 打印当前系统标识
 """
 
@@ -60,7 +60,7 @@ from devkit.system import detect_system
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="devkit",
-        description="配方(repice.json)驱动的构建工作流工具",
+        description="配方(recipe.json)驱动的构建工作流工具",
     )
     parser.add_argument("--version", action="version", version=f"devkit {__version__}")
     subparsers = parser.add_subparsers(dest="command")
@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("recipe", help="配方文件或目录路径，如 repice.json")
+    parser.add_argument("recipe", help="配方文件或目录路径，如 recipe.json")
     parser.add_argument(
         "-w",
         "--workdir",
@@ -111,7 +111,7 @@ def _setup_logging(verbose: bool) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
-    # 允许省略 build 子命令: devkit repice.json
+    # 允许省略 build 子命令: devkit recipe.json
     known = {"build", "run", "system", "-h", "--help", "--version"}
     if argv and argv[0] not in known and not argv[0].startswith("-"):
         argv.insert(0, "build")

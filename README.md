@@ -1,6 +1,6 @@
 # devkit
 
-配方（`repice.json`）驱动的构建工作流工具。克隆仓库、下载工具链、解压资源、
+配方（`recipe.json`）驱动的构建工作流工具。克隆仓库、下载工具链、解压资源、
 按工作流执行 shell 指令，全部由一个 JSON 配方描述。
 
 无 pyproject、无安装步骤，纯脚本直接运行；也可打包成独立 exe 分发。
@@ -18,11 +18,11 @@
 ## 用法
 
 ```text
-devkit build repice.json                # 执行配方
-devkit run repice.json                  # build 的别名，完全等价
-devkit build bon/repice.json -w build   # 指定工作区
-devkit build repice.json -j build-windows --dry-run
-devkit repice.json                      # 省略 build 也行
+devkit build recipe.json                # 执行配方
+devkit run recipe.json                  # build 的别名，完全等价
+devkit build bon/recipe.json -w build   # 指定工作区
+devkit build recipe.json -j build-windows --dry-run
+devkit recipe.json                      # 省略 build 也行
 devkit system                           # 打印当前系统标识（如 win_amd64）
 devkit --version
 ```
@@ -30,7 +30,7 @@ devkit --version
 直接以脚本运行（任何平台）：
 
 ```text
-python devkit/cli.py build repice.json
+python devkit/cli.py build recipe.json
 python devkit/cli.py --help
 ```
 
@@ -42,7 +42,7 @@ python devkit/cli.py --help
 ```text
 python dkpymodule/sync.py                 # 手动同步（构建时会自动做）
 pip install ./dkpymodule                  # 安装后得到 devkit 命令
-python -m devkit build repice.json        # 模块方式运行
+python -m devkit build recipe.json        # 模块方式运行
 ```
 
 依赖：`loguru`、`dulwich`、`littledl`（由 pip 自动装）；包入口内置 loguru 垫片，
@@ -64,7 +64,7 @@ venv\Scripts\pip.exe install pyinstaller   # 打包工具不进 requirements，�
 venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata littledl --collect-binaries dulwich --hidden-import win32_setctime --hidden-import colorama --hidden-import colorama.win32 --hidden-import colorama.winterm --hidden-import h2 --hidden-import httpcore._async.http2 --hidden-import httpcore._sync.http2 --hidden-import anyio._backends._asyncio --exclude-module dulwich.tests --exclude-module tkinter --distpath dist --workpath build\pyinstaller --specpath build\pyinstaller devkit\cli.py
 ```
 
-打包后 `dist\devkit\devkit.exe build repice.json` 即可使用（loguru 靠垫片降级，
+打包后 `dist\devkit\devkit.exe build recipe.json` 即可使用（loguru 靠垫片降级，
 故未打进 requirements；dulwich/littledl 依赖已随包收集）。
 
 ### build 参数
@@ -183,7 +183,7 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 * `next`：`null` 结束本作业；作业名切换到该作业
 * `linkup`：与被指步骤并发执行；组内失败按发起方的 errskip 处理
 * `call`：相对本配方文件的路径（文件或目录，目录按
-  `repice.json` / `recipe.json` 查找）；被调配方有 material 时在工作区下
+  `recipe.json` 查找）；被调配方有 material 时在工作区下
   以配方名开子目录，否则共用父工作区；循环调用会报错
 
 ### 作业（jobs）
@@ -246,7 +246,7 @@ devkit/
   errors.py     异常体系
   _version.py   版本号（唯一来源）
 dkpymodule/    可选壳工程: pyproject/setup.py/sync.py + src/devkit（同步生成）
-example/       示例配方: repice.json + hello.json
+example/       示例配方: recipe.json + hello.json
 requirements.txt 运行依赖（pyinstaller 不在此列，打包时单独装）
 test/           全套单元/集成/端到端测试（209 个）
 ```
