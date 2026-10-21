@@ -67,17 +67,27 @@ class TestUnzipOne(unittest.TestCase):
         self.addCleanup(self._td.cleanup)
         self.dest = self.tmp / "out"
 
-    def test_extracts_files_and_dirs(self):
-        z = make_zip(self.tmp / "tool.zip",
-                     {"hello.txt": "hi", "sub/dir/file.txt": "deep"})
+    def test_default_nests_into_same_named_subdir(self):
+        make_zip(self.tmp / "tool.zip",
+                 {"hello.txt": "hi", "sub/dir/file.txt": "deep"})
         result = unzip_one(UnzipSpec("tool.zip"), [self.tmp], self.dest, "win_amd64")
+        self.assertEqual(result, self.dest / "tool")
+        self.assertEqual((self.dest / "tool" / "hello.txt").read_text(encoding="utf-8"), "hi")
+        self.assertEqual((self.dest / "tool" / "sub" / "dir" / "file.txt")
+                         .read_text(encoding="utf-8"), "deep")
+
+    def test_extract_true_flattens_into_dest(self):
+        make_zip(self.tmp / "tool.zip",
+                 {"hello.txt": "hi", "sub/dir/file.txt": "deep"})
+        result = unzip_one(UnzipSpec("tool.zip", extract=True),
+                           [self.tmp], self.dest, "win_amd64")
         self.assertEqual(result, self.dest)
         self.assertEqual((self.dest / "hello.txt").read_text(encoding="utf-8"), "hi")
         self.assertEqual((self.dest / "sub" / "dir" / "file.txt")
                          .read_text(encoding="utf-8"), "deep")
 
     def test_system_filter_mismatch_skips(self):
-        z = make_zip(self.tmp / "tool.zip", {"x": "y"})
+        make_zip(self.tmp / "tool.zip", {"x": "y"})
         result = unzip_one(UnzipSpec("tool.zip", ("linux_amd64",)),
                            [self.tmp], self.dest, "win_amd64")
         self.assertIsNone(result)
@@ -94,7 +104,7 @@ class TestUnzipOne(unittest.TestCase):
         result = unzip_one(UnzipSpec("tool.zip"), [self.tmp], self.dest,
                            "win_amd64", dry_run=True)
         self.assertIsNone(result)
-        self.assertFalse((self.dest / "x").exists())
+        self.assertFalse(self.dest.exists())
 
     def test_missing_zip_strict_raises(self):
         with self.assertRaises(UnzipError):
@@ -106,7 +116,7 @@ class TestUnzipOne(unittest.TestCase):
             unzip_one(UnzipSpec("broken.zip"), [self.tmp], self.dest, "win_amd64")
 
     def test_zip_slip_rejected(self):
-        z = make_zip(self.tmp / "evil.zip", {"../evil.txt": "pwned"})
+        make_zip(self.tmp / "evil.zip", {"../evil.txt": "pwned"})
         with self.assertRaisesRegex(UnzipError, "之外"):
             unzip_one(UnzipSpec("evil.zip"), [self.tmp], self.dest, "win_amd64")
         self.assertFalse((self.tmp / "evil.txt").exists())
@@ -115,8 +125,8 @@ class TestUnzipOne(unittest.TestCase):
         z = make_zip(self.tmp / "abs.zip", {"a.txt": "A"})
         result = unzip_one(UnzipSpec(str(z)), [self.tmp / "nonexistent"], self.dest,
                            "win_amd64")
-        self.assertEqual(result, self.dest)
-        self.assertEqual((self.dest / "a.txt").read_text(encoding="utf-8"), "A")
+        self.assertEqual(result, self.dest / "abs")
+        self.assertEqual((self.dest / "abs" / "a.txt").read_text(encoding="utf-8"), "A")
 
 
 if __name__ == "__main__":

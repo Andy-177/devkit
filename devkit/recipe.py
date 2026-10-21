@@ -11,13 +11,18 @@
       },
       "download": [
         "https://example.com/tool.zip",                    # 总是下载
-        {"https://example.com/win.exe": "win_amd64"},      # 仅当系统匹配才下载
-        {"https://example.com/mac.dmg": ["macos_arm64", "macos_amd64"]}
+        {"url": "https://example.com/win.exe", "system": "win_amd64"},   # 仅当系统匹配才下载
+        {"url": "https://example.com/mac.dmg", "system": ["macos_arm64", "macos_amd64"]}
       ],
       "unzip": [
-        "releases.zip",                                    # 总是解压
-        {"toolchain.zip": "win_amd64",                     # 仅当系统匹配才解压
-         "../assets/extra.zip": ["macos_arm64", "macos_amd64"]}
+        "toolchain.zip",                                   # 简写: 总是解压，套同名子目录
+        {"file": "toolchain.zip", "system": "win_amd64"},  # 仅系统匹配才解压
+        {"file": "assets.zip", "extract": true}            # 直接铺到目标目录，不套子目录
+      ],
+      "unpack": [
+        "https://example.com/tool.zip",                    # 下载并解压（简写）
+        {"url": "https://example.com/win.zip",
+         "system": "win_amd64", "extract": true}           # 仅系统匹配才下载解压
       ],
       "data": ["build.sh", 0],
       "jobs": {
@@ -41,9 +46,15 @@
       }
     }
 
-unzip 和 download 类似，只是把链接换成了 zip 文件路径：相对路径先按配方文件所在
-目录解析，找不到再按工作区、最后按下载目录；解压结果统一落到下载目录
-（默认 ``.devkit``）。
+download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``system`` 过滤）：
+
+* download 的键是 ``url``，纯下载，只有 ``url`` 和 ``system`` 两个字段；
+* unzip 的键是本地文件 ``file``，可再带 ``extract``；本地 zip 文件按
+  "配方目录 -> 工作区 -> 下载目录"顺序查找；
+* unpack 的键是 ``url``，可再带 ``extract``；先从 ``url`` 下载 zip 到
+  ``<下载目录>/.dkcache``，再解压释放；
+* unzip/unpack 都解压到下载目录（默认 ``.devkit``）；``extract:true`` 时把压缩包里的
+  内容直接铺到下载目录，否则先建一个与压缩包同名的子目录再解压进去。
 
 ``run`` 永远是"双层列表"：第一层是要执行的命令列表，第二层才是一条命令。第一层
 里命令的位置就是执行顺序，第 0 条跑完跑第 1 条，依次往下::
@@ -65,7 +76,7 @@ unzip 和 download 类似，只是把链接换成了 zip 文件路径：相对�
 ``[["C:/Python/python.exe", "-c", 0]]``、``[["tool.exe", "-v"]]`` 直接启动。
 
 执行顺序是固定的，没有集中式编排：``material`` 克隆 -> ``download``（按列表顺序）
--> ``unzip``（按列表顺序）-> ``jobs``（按声明顺序）。编排的权利下放到步骤里，
+-> ``unzip``（按列表顺序）-> ``unpack``（按列表顺序）-> ``jobs``（按声明顺序）。编排的权利下放到步骤里，
 步骤的控制字段（全部可选）::
 
     "init": {
@@ -171,7 +182,7 @@ DEFAULT_STEP_ERRSKIP = STEP_ERR_STOP
 #: 作业 errskip 缺省: 终止出错的作业，联动的作业跑完再继续下一个作业
 DEFAULT_JOB_ERRSKIP = JOB_ERR_PROCEED
 
-_KNOWN_TOP_KEYS = {"material", "download", "unzip", "data", "jobs"}
+_KNOWN_TOP_KEYS = {"material", "download", "unzip", "unpack", "data", "jobs"}
 _KNOWN_MATERIAL_KEYS = {"repo", "branch", "depth", "commit"}
 _KNOWN_JOB_KEYS = {"system", "steps", "skip", "linkup", "errskip"}
 _KNOWN_STEP_KEYS = {"run", "call", "skip", "errskip", "linkup", "jump", "next", "if"}
@@ -201,10 +212,31 @@ class DownloadSpec:
 
 @dataclass(frozen=True)
 class UnzipSpec:
-    """一个解压项: 一个 zip 路径，可带系统过滤。``systems`` 为 None 表示总是解压。"""
+    """一个解压项: 一个本地 zip 文件，可带系统过滤与 extract 选项。
 
-    path: str
+    ``systems`` 为 None 表示总是解压。``extract`` 为 True 时把压缩包里的内容直接
+    铺到目标目录，否则先建一个与压缩包同名的子目录再解压进去。
+    """
+
+    file: str
     systems: tuple[str, ...] | None = None
+    extract: bool = False
+
+    def matches(self, system: str) -> bool:
+        return self.systems is None or system in self.systems
+
+
+@dataclass(frozen=True)
+class UnpackSpec:
+    """一个下载并解压项: 一个 zip URL，可带系统过滤与 extract 选项。
+
+    下载的压缩包缓存到下载目录的 ``.dkcache`` 子目录，解压释放到下载目录。
+    ``extract`` 语义同 :class:`UnzipSpec`。
+    """
+
+    url: str
+    systems: tuple[str, ...] | None = None
+    extract: bool = False
 
     def matches(self, system: str) -> bool:
         return self.systems is None or system in self.systems
@@ -264,6 +296,7 @@ class Recipe:
     material: Material | None = None
     downloads: tuple[DownloadSpec, ...] = ()
     unzips: tuple[UnzipSpec, ...] = ()
+    unpacks: tuple[UnpackSpec, ...] = ()
     data: tuple[Any, ...] = ()
     jobs: tuple[Job, ...] = field(default_factory=tuple)
 
@@ -350,12 +383,25 @@ def _parse_system_filter(value: Any, where: str) -> tuple[str, ...] | None:
     raise RecipeError(f"{where} 必须是字符串或字符串列表")
 
 
-def _parse_spec_list(raw: Any, where: str, make, what: str) -> tuple:
-    """解析 download/unzip 这类"列表 + 可选系统过滤"的字段。"""
+def _parse_spec_list(
+    raw: Any, where: str, make, url_key: str, what: str, *, allow_extract: bool = True
+) -> tuple:
+    """解析 download/unpack/unzip 这类"列表 + 对象项"的字段。
+
+    每一项要么是字符串（简写，等价于只填了 url/file 的对象），要么是对象::
+
+        {"url": "https://...", "system": "win_amd64"}                    # download
+        {"url": "https://...", "system": "win_amd64", "extract": true}   # unpack
+        {"file": "tool.zip",   "system": "win_amd64", "extract": true}   # unzip
+
+    ``system`` 缺省表示所有系统都执行，可给字符串或字符串列表；
+    ``extract`` 仅在 ``allow_extract`` 为真时可用，缺省 False（先建同名子目录再解压）。
+    """
     if raw is None:
         return ()
     if not isinstance(raw, list):
         raise RecipeError(f"{where} 必须是列表")
+    allowed = (url_key, "system", "extract") if allow_extract else (url_key, "system")
     specs: list[Any] = []
     for index, item in enumerate(raw):
         item_where = f"{where}[{index}]"
@@ -363,24 +409,43 @@ def _parse_spec_list(raw: Any, where: str, make, what: str) -> tuple:
             if not item:
                 raise RecipeError(f"{item_where} {what}不能为空")
             specs.append(make(item, None))
-        elif isinstance(item, dict):
-            if not item:
-                raise RecipeError(f"{item_where} 不能为空对象")
-            for value, systems in item.items():
-                if not isinstance(value, str) or not value:
-                    raise RecipeError(f"{item_where} 的键必须是非空的{what}")
-                specs.append(make(value, _parse_system_filter(systems, item_where)))
+            continue
+        if not isinstance(item, dict):
+            hint = f'{{"{url_key}": ..., "system": ...}}'
+            if allow_extract:
+                hint = f'{{"{url_key}": ..., "system": ..., "extract": true}}'
+            raise RecipeError(f"{item_where} 必须是{what}字符串或对象 (如 {hint})")
+        for key in item:
+            if key not in allowed:
+                raise RecipeError(
+                    f"{item_where} 不认识的字段 {key!r}（只能是 {'/'.join(allowed)}）"
+                )
+        value = item.get(url_key)
+        if not isinstance(value, str) or not value:
+            raise RecipeError(f"{item_where}.{url_key} 必填且必须是字符串")
+        systems = _parse_system_filter(item.get("system"), f"{item_where}.system")
+        if allow_extract:
+            extract = _parse_bool(item.get("extract"), f"{item_where}.extract")
+            specs.append(make(value, systems, extract))
         else:
-            raise RecipeError(f"{item_where} 必须是{what}字符串或 {{{what}: 系统}} 对象")
+            specs.append(make(value, systems))
     return tuple(specs)
 
 
 def _parse_download(raw: Any, where: str) -> tuple[DownloadSpec, ...]:
-    return _parse_spec_list(raw, where, DownloadSpec, "下载链接")
+    """download 用与 unpack/unzip 一致的对象式: 字符串简写或 ``{url, system}``。
+
+    download 是纯下载，没有 ``extract``。
+    """
+    return _parse_spec_list(raw, where, DownloadSpec, "url", "下载链接", allow_extract=False)
 
 
 def _parse_unzip(raw: Any, where: str) -> tuple[UnzipSpec, ...]:
-    return _parse_spec_list(raw, where, UnzipSpec, "zip 路径")
+    return _parse_spec_list(raw, where, UnzipSpec, "file", "zip 文件")
+
+
+def _parse_unpack(raw: Any, where: str) -> tuple[UnpackSpec, ...]:
+    return _parse_spec_list(raw, where, UnpackSpec, "url", "zip 链接")
 
 
 def _run_scalar(value: Any) -> bool:
@@ -600,6 +665,7 @@ def _parse_recipe(path: Path, raw: dict) -> Recipe:
         material=_parse_material(raw.get("material"), "material"),
         downloads=_parse_download(raw.get("download"), "download"),
         unzips=_parse_unzip(raw.get("unzip"), "unzip"),
+        unpacks=_parse_unpack(raw.get("unpack"), "unpack"),
         data=tuple(raw.get("data") or ()),
         jobs=_parse_jobs(raw.get("jobs"), "jobs"),
     )

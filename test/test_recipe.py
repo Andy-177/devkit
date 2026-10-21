@@ -16,6 +16,7 @@ from devkit.recipe import (
     Material,
     Recipe,
     Step,
+    UnpackSpec,
     UnzipSpec,
     bind_call_args,
     load_recipe,
@@ -160,37 +161,84 @@ class TestDownloadUnzip(unittest.TestCase):
         recipe = load_recipe(write_recipe(self.tmp, {"download": ["https://a/b.zip"]}))
         self.assertEqual(recipe.downloads, (DownloadSpec("https://a/b.zip", None),))
 
-    def test_dict_form_string_system(self):
+    def test_object_form_string_system(self):
         recipe = load_recipe(write_recipe(
-            self.tmp, {"download": [{"https://a/b.zip": "win_amd64"}]}))
+            self.tmp, {"download": [{"url": "https://a/b.zip", "system": "win_amd64"}]}))
         self.assertEqual(recipe.downloads[0].systems, ("win_amd64",))
 
-    def test_dict_form_list_systems(self):
+    def test_object_form_list_systems(self):
         recipe = load_recipe(write_recipe(
-            self.tmp, {"download": [{"https://a/b.zip": ["linux_amd64", "macos_arm64"]}]}))
+            self.tmp, {"download": [{"url": "https://a/b.zip", "system": ["linux_amd64", "macos_arm64"]}]}))
         self.assertEqual(recipe.downloads[0].systems, ("linux_amd64", "macos_arm64"))
 
     def test_empty_string_system_means_always(self):
-        recipe = load_recipe(write_recipe(self.tmp, {"download": [{"https://a/b.zip": ""}]}))
+        recipe = load_recipe(write_recipe(
+            self.tmp, {"download": [{"url": "https://a/b.zip", "system": ""}]}))
         self.assertIsNone(recipe.downloads[0].systems)
 
     def test_empty_list_system_means_always(self):
-        recipe = load_recipe(write_recipe(self.tmp, {"download": [{"https://a/b.zip": []}]}))
+        recipe = load_recipe(write_recipe(
+            self.tmp, {"download": [{"url": "https://a/b.zip", "system": []}]}))
         self.assertIsNone(recipe.downloads[0].systems)
 
+    def test_download_rejects_extract_and_old_key(self):
+        for raw in (
+            {"download": [{"https://a/b.zip": "win_amd64"}]},   # 旧式 键值对
+            {"download": [{"url": "https://a/b.zip", "extract": True}]},  # download 无 extract
+            {"download": [{"url": "https://a/b.zip", "x": 1}]},  # 未知字段
+        ):
+            with self.subTest(raw=raw), self.assertRaises(RecipeError):
+                load_recipe(write_recipe(self.tmp, raw))
+
     def test_unzip_parsing(self):
-        recipe = load_recipe(write_recipe(self.tmp, {"unzip": ["a.zip", {"b.zip": "win_amd64"}]}))
-        self.assertEqual(recipe.unzips,
-                         (UnzipSpec("a.zip", None), UnzipSpec("b.zip", ("win_amd64",))))
+        recipe = load_recipe(write_recipe(self.tmp, {"unzip": [
+            "a.zip",
+            {"file": "b.zip", "system": "win_amd64"},
+            {"file": "c.zip", "extract": True},
+        ]}))
+        self.assertEqual(recipe.unzips, (
+            UnzipSpec("a.zip"),
+            UnzipSpec("b.zip", ("win_amd64",)),
+            UnzipSpec("c.zip", None, True),
+        ))
+
+    def test_unpack_parsing(self):
+        recipe = load_recipe(write_recipe(self.tmp, {"unpack": [
+            "https://a/b.zip",
+            {"url": "https://a/c.zip", "system": ["win_amd64", "linux_amd64"], "extract": True},
+        ]}))
+        self.assertEqual(recipe.unpacks, (
+            UnpackSpec("https://a/b.zip"),
+            UnpackSpec("https://a/c.zip", ("win_amd64", "linux_amd64"), True),
+        ))
+
+    def test_unzip_rejects_old_key_and_unknown_fields(self):
+        for raw in (
+            {"unzip": [{"b.zip": "win_amd64"}]},        # 旧式 键值对
+            {"unzip": [{"path": "b.zip"}]},             # 错字段名
+            {"unzip": [{"file": "b.zip", "sys": "x"}]}, # 未知字段
+            {"unzip": [{"system": "win_amd64"}]},       # 缺 file
+        ):
+            with self.subTest(raw=raw), self.assertRaises(RecipeError):
+                load_recipe(write_recipe(self.tmp, raw))
+
+    def test_unpack_rejects_old_key_and_unknown_fields(self):
+        for raw in (
+            {"unpack": [{"https://a/b.zip": "win_amd64"}]},
+            {"unpack": [{"file": "b.zip"}]},            # 用了 file 而非 url
+            {"unpack": [{"url": "https://a/b.zip", "x": 1}]},
+        ):
+            with self.subTest(raw=raw), self.assertRaises(RecipeError):
+                load_recipe(write_recipe(self.tmp, raw))
 
     def test_bad_items(self):
         for raw in (
-            {"download": "https://a/b.zip"},        # 非列表
-            {"download": [""]},                     # 空链接
-            {"download": [{}]},                     # 空对象
-            {"download": [123]},                    # 非字符串
-            {"download": [{"": "win"}]},            # 空键
-            {"download": [{"https://a/b.zip": 5}]},  # 系统过滤类型错误
+            {"download": "https://a/b.zip"},               # 非列表
+            {"download": [""]},                            # 空链接
+            {"download": [{}]},                            # 空对象
+            {"download": [123]},                           # 非字符串
+            {"download": [{"url": ""}]},                   # 空 url
+            {"download": [{"url": "https://a/b.zip", "system": 5}]},  # 系统过滤类型错误
         ):
             with self.subTest(raw=raw), self.assertRaises(RecipeError):
                 load_recipe(write_recipe(self.tmp, raw))
@@ -200,8 +248,10 @@ class TestDownloadUnzip(unittest.TestCase):
         self.assertTrue(spec.matches("win_amd64"))
         self.assertFalse(spec.matches("linux_amd64"))
         self.assertTrue(DownloadSpec("u", None).matches("anything"))
-        zspec = UnzipSpec("z", None)
-        self.assertTrue(zspec.matches("anything"))
+        self.assertTrue(UnzipSpec("z", None).matches("anything"))
+        self.assertFalse(UnzipSpec("z", ("linux_amd64",)).matches("win_amd64"))
+        self.assertTrue(UnpackSpec("u", None).matches("anything"))
+        self.assertFalse(UnpackSpec("u", ("linux_amd64",)).matches("win_amd64"))
 
 
 class TestRunParsing(unittest.TestCase):

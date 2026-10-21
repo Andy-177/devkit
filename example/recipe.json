@@ -4,7 +4,16 @@
     "depth": 1
   },
   "download": [
-    "https://example.com/tool.zip"
+    "https://example.com/tool.zip",
+    { "url": "https://example.com/win.exe", "system": "win_amd64" }
+  ],
+  "unzip": [
+    "local-assets.zip",
+    { "file": "win-only.zip", "system": "win_amd64", "extract": true }
+  ],
+  "unpack": [
+    "https://example.com/bundle.zip",
+    { "url": "https://example.com/win-tools.zip", "system": "win_amd64", "extract": true }
   ],
   "data": ["build.sh"],
   "jobs": {

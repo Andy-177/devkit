@@ -1,7 +1,10 @@
 """配方 unzip 段的解压，基于标准库 zipfile。
 
-zip 路径是相对路径，按下面的顺序查找: 配方文件所在目录 -> 工作区 -> 下载目录。
-解压结果统一落到下载目录（默认 ``.devkit``）。
+zip 文件是相对路径，按下面的顺序查找: 配方文件所在目录 -> 克隆的 workspace 子目录
+-> 工作区 -> 下载目录。解压结果统一落到下载目录（默认 ``.devkit``）：
+
+* ``extract:true`` 时把压缩包里的内容直接铺到下载目录；
+* 否则先在下载目录下建一个与压缩包同名的子目录，再解压进去。
 """
 
 from __future__ import annotations
@@ -19,6 +22,14 @@ from devkit.progress import ProgressBar
 from devkit.recipe import UnzipSpec
 
 _CHUNK = 1024 * 256
+
+
+def extract_root(dest: Path, archive: Path, *, extract: bool) -> Path:
+    """按 ``extract`` 选项算出解压目标目录。
+
+    ``extract`` 为 True 时直接返回 ``dest``，否则返回 ``dest / archive.stem``。
+    """
+    return dest if extract else dest / archive.stem
 
 
 def resolve_zip(path: str, bases: Sequence[Path], *, strict: bool = True) -> Path:
@@ -87,22 +98,28 @@ def unzip_one(
     *,
     dry_run: bool = False,
 ) -> Path | None:
-    """解压一个 zip 到 ``dest``，返回目标目录；跳过时返回 None。"""
+    """解压一个本地 zip 到 ``dest``，返回目标目录；跳过时返回 None。"""
     if not spec.matches(system):
-        logger.info("跳过解压 (需要系统 {}): {}", "/".join(spec.systems or ()), spec.path)
+        logger.info("跳过解压 (需要系统 {}): {}", "/".join(spec.systems or ()), spec.file)
         return None
 
-    source = resolve_zip(spec.path, bases, strict=not dry_run)
-    logger.info("解压 {} -> {}", source, dest)
+    source = resolve_zip(spec.file, bases, strict=not dry_run)
+    target = extract_root(dest, source, extract=spec.extract)
+    logger.info("解压 {} -> {}", source, target)
     if dry_run:
         return None
 
+    _unzip_to(source, target, spec.file)
+    return target
+
+
+def _unzip_to(source: Path, target: Path, label: str) -> None:
+    """把 ``source`` 解压到 ``target``，进度条以 zip 名显示。"""
     try:
-        dest.mkdir(parents=True, exist_ok=True)
+        target.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(source) as archive, ProgressBar(source.name) as bar:
-            _extract_all(archive, dest, spec.path, bar)
+            _extract_all(archive, target, label, bar)
     except zipfile.BadZipFile as exc:
         raise UnzipError(f"{source} 不是合法的 zip 文件: {exc}") from exc
     except OSError as exc:
         raise UnzipError(f"解压 {source} 失败: {exc}") from exc
-    return dest

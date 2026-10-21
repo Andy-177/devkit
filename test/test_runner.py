@@ -446,15 +446,75 @@ class TestDownloadUnzipInRecipe(RunnerTestCase):
         with zipfile.ZipFile(archive, "w") as zf:
             zf.writestr("extracted.txt", "payload")
         path = write_recipe(self.tmp, {
-            "download": [{"https://example.com/remote.zip": "linux_arm64"}],
+            "download": [{"url": "https://example.com/remote.zip", "system": "linux_arm64"}],
             "unzip": ["assets.zip"],
             "jobs": {"main": {"steps": {"s": {"run": [echo_write("done.txt")]}}}},
         })
         runner = run_recipe(path, self.workdir)
         self.assertFalse(runner.failed)
         self.assertFalse((self.workdir / "remote.zip").exists())  # 系统过滤掉，没触网
-        self.assertTrue((self.workdir / "dl" / "extracted.txt").exists())
+        # 缺省 extract=false: 解压到与压缩包同名的子目录
+        self.assertTrue((self.workdir / "dl" / "assets" / "extracted.txt").exists())
         self.assertTrue((self.workdir / "done.txt").exists())
+
+    def test_unzip_extract_true_flattens(self):
+        import zipfile
+
+        archive = self.tmp / "assets.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("flat.txt", "payload")
+        path = write_recipe(self.tmp, {
+            "unzip": [{"file": "assets.zip", "extract": True}],
+            "jobs": {"main": {"steps": {"s": {"run": [echo_write("done.txt")]}}}},
+        })
+        run_recipe(path, self.workdir)
+        self.assertTrue((self.workdir / "dl" / "flat.txt").exists())
+
+    def test_unpack_downloads_then_extracts(self):
+        import zipfile
+
+        source = self.tmp / "bundle.zip"
+        with zipfile.ZipFile(source, "w") as zf:
+            zf.writestr("inner.txt", "payload")
+
+        def fake_download(spec, dest, system, *, dry_run=False):
+            dest.mkdir(parents=True, exist_ok=True)
+            target = dest / "bundle.zip"
+            target.write_bytes(source.read_bytes())
+            return target
+
+        path = write_recipe(self.tmp, {
+            "unpack": [{"url": "https://example.com/bundle.zip", "extract": True}],
+            "jobs": {"main": {"steps": {"s": {"run": [echo_write("done.txt")]}}}},
+        })
+        with mock.patch("devkit.unpack.download_one", side_effect=fake_download):
+            runner = run_recipe(path, self.workdir)
+        self.assertFalse(runner.failed)
+        dl = self.workdir / "dl"
+        self.assertTrue((dl / ".dkcache" / "bundle.zip").exists())  # 缓存
+        self.assertTrue((dl / "inner.txt").exists())               # extract=true 直接铺开
+
+    def test_unpack_default_nests_into_same_named_subdir(self):
+        import zipfile
+
+        source = self.tmp / "bundle.zip"
+        with zipfile.ZipFile(source, "w") as zf:
+            zf.writestr("inner.txt", "payload")
+
+        def fake_download(spec, dest, system, *, dry_run=False):
+            dest.mkdir(parents=True, exist_ok=True)
+            target = dest / "bundle.zip"
+            target.write_bytes(source.read_bytes())
+            return target
+
+        path = write_recipe(self.tmp, {
+            "unpack": ["https://example.com/bundle.zip"],
+            "jobs": {"main": {"steps": {"s": {"run": [echo_write("done.txt")]}}}},
+        })
+        with mock.patch("devkit.unpack.download_one", side_effect=fake_download):
+            run_recipe(path, self.workdir)
+        dl = self.workdir / "dl"
+        self.assertTrue((dl / "bundle" / "inner.txt").exists())
 
 
 class TestSpawnInternals(RunnerTestCase):

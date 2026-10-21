@@ -11,12 +11,14 @@
 * 下载文件不放进工作区，统一落在下载目录 ``--download-dir``（默认 ``./.devkit``，
   与默认工作区相同），配方里用 ``<文件名>`` 这类相对路径引用；
 * ``unzip`` 解压出的内容也统一落到下载目录，zip 自身按"配方目录 ->
-  克隆的 workspace 子目录 -> 工作区 -> 下载目录"的顺序查找。
+  克隆的 workspace 子目录 -> 工作区 -> 下载目录"的顺序查找；
+* ``unpack`` 是 download 与 unzip 的结合体：zip 先下载到 ``<下载目录>/.dkcache``
+  缓存，再解压释放到下载目录。
 
 执行顺序与步骤控制:
 
 * 固定顺序: ``material`` 克隆 -> ``download``（按列表顺序）-> ``unzip``（按列表顺序）
-  -> ``jobs``（按声明顺序逐个执行），没有集中式编排；
+  -> ``unpack``（按列表顺序）-> ``jobs``（按声明顺序逐个执行），没有集中式编排；
 * 步骤默认按声明顺序执行，控制字段（``skip``/``errskip``/``linkup``/``jump``/``next``/
   ``if``）的语义见 ``devkit.recipe`` 的说明；失败等级 ``errskip``（``crash``/``stop``/
   ``proceed``/``skip``，缺省 ``stop``）决定失败的爆炸半径；
@@ -63,6 +65,7 @@ from devkit.recipe import (
     resolve_recipe_path,
 )
 from devkit.system import detect_system
+from devkit.unpack import unpack_one
 from devkit.unzip import unzip_one
 
 #: 默认工作区（run 指令的执行目录）
@@ -159,11 +162,12 @@ class RecipeRunner:
         stack: tuple[Path, ...],
         top: bool,
     ) -> None:
-        """固定顺序: 克隆 -> 下载 -> 解压 -> 工作流。"""
+        """固定顺序: 克隆 -> 下载 -> 解压 -> 下载解压 -> 工作流。"""
         if recipe.material is not None:
             self._clone(recipe, cwd)
         self._run_downloads(recipe)
         self._run_unzips(recipe, cwd)
+        self._run_unpacks(recipe)
         self._run_jobs(recipe, data=data, cwd=cwd, stack=stack, top=top)
 
     def _clone(self, recipe: Recipe, cwd: Path) -> None:
@@ -182,6 +186,10 @@ class RecipeRunner:
         bases = (recipe.dir, cwd / _CLONE_SUBDIR, cwd, self.download_dir)
         for spec in recipe.unzips:
             unzip_one(spec, bases, self.download_dir, self.system, dry_run=self.dry_run)
+
+    def _run_unpacks(self, recipe: Recipe) -> None:
+        for spec in recipe.unpacks:
+            unpack_one(spec, self.download_dir, self.system, dry_run=self.dry_run)
 
     # ------------------------------------------------------------------ job
 
