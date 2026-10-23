@@ -260,6 +260,56 @@ class RecipeRunner:
 
     # ----------------------------------------------------------------- 配方
 
+    def prepare_devlop(self, recipe_path: Path | str) -> tuple[Recipe, Path]:
+        """执行配方的非 jobs 部分（material/download/unzip/unpack）。
+
+        返回解析后的配方和工作区目录；终端本身由 ``devkit.devlop`` 负责。
+        """
+        path = resolve_recipe_path(recipe_path)
+        recipe = load_recipe(path)
+        logger.info("== 配方: {}", recipe.path)
+        cwd = self._prepare(recipe, workdir=self.workdir, top=True)
+        if recipe.material is not None:
+            self._clone(recipe, cwd)
+        self._run_downloads(recipe)
+        self._run_unzips(recipe, cwd)
+        self._run_unpacks(recipe)
+        return recipe, cwd
+
+    def devlop_env(self, recipe: Recipe) -> dict[str, str]:
+        """只计算配方级（全局）环境；作业/步骤级环境不参与。"""
+        effective = self._effective_expr(recipe)
+        if recipe.area is not None:
+            area = self._eval_env_entries(recipe.area, recipe, effective, "area")
+            return self._merge_env({}, area)
+        env = self._eval_env_entries(recipe.env, recipe, effective, "env")
+        return self._merge_env({}, env)
+
+    def run_devlop_line(
+        self,
+        line: str,
+        *,
+        recipe: Recipe,
+        cwd: Path,
+        env: dict[str, str] | None = None,
+    ) -> None:
+        """执行 devlop 输入的一行命令，走与 run 步骤相同的执行路径。"""
+        if env is None:
+            env = self.devlop_env(recipe)
+        step = Step(name="devlop", run=((line,),))
+        job = Job(name="devlop")
+        effective = self._effective_expr(recipe, job, step)
+        if should_eval_expression(effective, "run"):
+            line = str(substitute_in_value(line, self._get_expr_ns(recipe), True))
+        self._exec_shell(
+            line,
+            cwd=cwd,
+            recipe=recipe,
+            step=step,
+            env=dict(env) if env else None,
+            announce=False,
+        )
+
     def _run_recipe(
         self,
         path: Path,
@@ -846,9 +896,11 @@ class RecipeRunner:
         recipe: Recipe,
         step: Step,
         env: dict[str, str] | None = None,
+        announce: bool = True,
     ) -> None:
         """执行一条 shell 命令行（由命令片段拼成，或来自无法解析成程序的命令）。"""
-        logger.info("    $ {}   (cwd: {}, shell)", line, cwd)
+        if announce:
+            logger.info("    $ {}   (cwd: {}, shell)", line, cwd)
         if self.dry_run:
             return
 

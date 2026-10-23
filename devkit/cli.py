@@ -4,6 +4,7 @@
 
     devkit build recipe.json               # 执行配方
     devkit run recipe.json                 # build 的别名，等价
+    devkit devlop recipe.json              # 执行非 jobs 部分后进入交互终端
     devkit build bon/recipe.json -w build  # 指定工作目录
     devkit build recipe.json -j build-windows --dry-run
     devkit system                        # 打印当前系统标识
@@ -68,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
     build = subparsers.add_parser("build", aliases=["run"], help="执行一个配方（run 是别名）")
     _add_run_arguments(build)
 
+    devlop = subparsers.add_parser(
+        "devlop", help="执行配方的非 jobs 部分，然后进入 devkit 交互终端"
+    )
+    _add_recipe_arguments(devlop, with_job=False)
+
     system = subparsers.add_parser("system", help="打印当前检测到的系统标识")
     system.add_argument("-v", "--verbose", action="store_true", help="输出调试日志")
 
@@ -78,6 +84,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_recipe_arguments(parser, with_job=True)
+
+
+def _add_recipe_arguments(parser: argparse.ArgumentParser, *, with_job: bool) -> None:
     parser.add_argument("recipe", help="配方文件或目录路径，如 recipe.json")
     parser.add_argument(
         "-w",
@@ -92,9 +102,10 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         help=f"下载目录，所有下载的文件都放这里 (默认: {DEFAULT_DOWNLOAD_DIR})",
     )
     parser.add_argument("-s", "--system", default=None, help="覆盖自动检测的系统标识")
-    parser.add_argument(
-        "-j", "--job", action="append", default=None, help="只执行指定名称的工作流，可重复"
-    )
+    if with_job:
+        parser.add_argument(
+            "-j", "--job", action="append", default=None, help="只执行指定名称的工作流，可重复"
+        )
     parser.add_argument("--dry-run", action="store_true", help="只打印要做的事，不真正执行")
     parser.add_argument("-v", "--verbose", action="store_true", help="输出调试日志")
 
@@ -115,7 +126,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
     # 允许省略 build 子命令: devkit recipe.json
-    known = {"build", "run", "system", "-h", "--help", "--version", "console"}
+    known = {"build", "run", "devlop", "system", "-h", "--help", "--version", "console"}
     if argv and argv[0] not in known and not argv[0].startswith("-"):
         argv.insert(0, "build")
 
@@ -151,6 +162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "unpack",
             "errors",
             "guard",
+            "devlop",
         ):
             try:
                 ns[module_name] = importlib.import_module(f"devkit.{module_name}")
@@ -162,6 +174,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         banner = "devkit console (type help() for help, exit() or Ctrl-D to exit)"
         code.interact(banner=banner, local=ns)
         return 0
+
+    if args.command == "devlop":
+        from devkit.devlop import run_devlop
+
+        try:
+            runner = RecipeRunner(
+                workdir=Path(args.workdir),
+                system=args.system,
+                download_dir=Path(args.download_dir),
+                dry_run=args.dry_run,
+            )
+            logger.info(
+                "devkit {} | 系统: {} | 工作区: {} | 下载目录: {}",
+                __version__,
+                runner.system,
+                runner.workdir,
+                runner.download_dir,
+            )
+            if args.dry_run:
+                logger.info("dry-run 模式: 不会执行克隆/下载/指令")
+            return run_devlop(runner, args.recipe)
+        except StepError as exc:
+            logger.error("执行失败: {}", exc)
+            return exc.returncode or 1
+        except DevkitError as exc:
+            logger.error("{}", exc)
+            return 1
+        except KeyboardInterrupt:
+            logger.error("已中断")
+            return 130
 
     try:
         runner = RecipeRunner(

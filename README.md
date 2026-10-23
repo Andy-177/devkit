@@ -14,12 +14,14 @@
   * `dulwich` — `material` 克隆需要
   * `littledl` — `download` 下载需要
   * `loguru` — 彩色日志（可选）
+  * `prompt_toolkit` — `devlop` 交互终端需要
 
 ## 用法
 
 ```text
 devkit build recipe.json                # 执行配方
 devkit run recipe.json                  # build 的别名，完全等价
+devkit devlop recipe.json               # 执行非 jobs 部分后进入交互终端
 devkit build bon/recipe.json -w build   # 指定工作区
 devkit build recipe.json -j build-windows --dry-run
 devkit recipe.json                      # 省略 build 也行
@@ -46,7 +48,7 @@ pip install ./dkpymodule                  # 安装后得到 devkit 命令
 python -m devkit build recipe.json        # 模块方式运行
 ```
 
-依赖：`loguru`、`dulwich`、`littledl`（由 pip 自动装）；包入口内置 loguru 垫片，
+依赖：`loguru`、`dulwich`、`littledl`、`prompt_toolkit`（由 pip 自动装）；包入口内置 loguru 垫片，
 缺 loguru 也能跑。
 
 ### 构建独立二进制（可选）
@@ -194,6 +196,22 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 `devkit console` 会启动一个 Python REPL，内置完整的 builtins、`get_recipe_path()`、
 `get_system_info()`，并注入 `devkit` 包及各子模块（`recipe`/`runner`/`expr` 等），
 方便手工验证表达式。
+
+### devlop 交互终端
+
+`devkit devlop recipe.json` 先执行配方的非 `jobs` 部分（`material`/`download`/
+`unzip`/`unpack`），然后进入交互终端。终端默认工作目录是 `--workdir`；命令通过与
+`run` 相同的执行路径运行，因此继承配方级 `env`/`area`，但不会继承作业级、步骤级
+环境。`cd`/`chdir`、`exit`/`quit`/`logout` 是终端内建命令。
+
+```text
+devlop 用户名@PC名 完整所在路径 $
+└─> 
+```
+
+支持多行输入，续行提示为 ` ╰> `，各行用空格拼接（例如第一行 `cd`、第二行 `/?`
+等价于 `cd /?`）。Enter 执行，Ctrl-J 换行（行数不限），Ctrl-D 退出。参数与 `build`
+相同，但没有 `-j/--job`。
 
 ### 表达式 `?!{{...}}`
 
