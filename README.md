@@ -24,6 +24,7 @@ devkit build bon/recipe.json -w build   # 指定工作区
 devkit build recipe.json -j build-windows --dry-run
 devkit recipe.json                      # 省略 build 也行
 devkit system                           # 打印当前系统标识（如 win_amd64）
+devkit console                          # 进入 devkit 表达式 REPL
 devkit --version
 ```
 
@@ -189,6 +190,46 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 
 顶层 `area` 用来让子配方**不接受**从调用方继承的环境：子配方在顶层写 `area`，就只用
 自己的 area。
+
+`devkit console` 会启动一个 Python REPL，内置完整的 builtins、`get_recipe_path()`、
+`get_system_info()`，并注入 `devkit` 包及各子模块（`recipe`/`runner`/`expr` 等），
+方便手工验证表达式。
+
+### 表达式 `?!{{...}}`
+
+任意字符串字段中都可以写 Python 表达式，默认**关闭**，必须显式打开：
+
+```json
+{
+  "expression": true,
+  "download": [{"url": "?!{{'https://host/' + get_system_info() + '.zip'}}"}],
+  "jobs": {
+    "build": {
+      "expression": ["run", "env"],
+      "steps": {
+        "s": {
+          "run": [["echo", "?!{{1 + 2}}", ">", "out.txt"]],
+          "env": [{"key": "HOME2", "value": "?!{{get_recipe_path()}}"}]
+        }
+      }
+    }
+  }
+}
+```
+
+* 表达式在**运行时**求值（解析配方时只保留原文）；
+* 整串只含一个表达式时保留结果原始类型（数字、列表、字典等），否则把各段结果
+  转成字符串后拼接；
+* 命名空间包含完整 builtins（可以 `import`），以及 `get_recipe_path()`（当前配方
+  路径）与 `get_system_info()`（当前系统标识）；
+* 支持嵌套花括号（如 `{'a': {'b': 1}}`），引号内的花括号不参与配对；
+* 求值失败会打印完整 Python 报错并**强制终止整个工作流**，不受任何 `errskip` 影响。
+
+`expression` 可写在全局、作业、步骤三处，按就近原则覆盖：`true` 开启全部，
+`["run", "env", ...]` 是功能/字段白名单，`false` 关闭（可关闭上层开启的表达式）。
+可用功能名：`material`（别名 `clone`）、`download`、`unzip`、`unpack`、`env`、
+`area`、`data`、`system`、`run`、`call`。默认关闭。`system` 也可用于作业/步骤/
+环境项/下载项的 `system` 过滤（如 `"system": "?!{{get_system_info()}}"`）。
 
 ### run 与 data
 

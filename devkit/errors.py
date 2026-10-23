@@ -11,6 +11,13 @@ class RecipeError(DevkitError):
     """配方文件缺失、JSON 非法或字段不合法。"""
 
 
+class ExpressionError(RecipeError):
+    """表达式求值失败。
+
+    这类错误必须立即终止整个工作流，不能被任何 ``errskip`` 策略吞掉。
+    """
+
+
 class CloneError(DevkitError):
     """git 克隆失败。"""
 

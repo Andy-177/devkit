@@ -40,6 +40,7 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -47,7 +48,21 @@ from loguru import logger
 
 from devkit import guard
 from devkit.dl import download_one
-from devkit.errors import InteractiveInputError, JobStop, RecipeError, StepError
+from devkit.errors import (
+    ExpressionError,
+    InteractiveInputError,
+    JobStop,
+    RecipeError,
+    StepError,
+)
+from devkit.expr import (
+    get_builtin_namespace,
+    get_effective_expression,
+    has_expression,
+    should_eval_expression,
+    substitute_expression,
+    substitute_in_value,
+)
 from devkit.git import ensure_clone
 from devkit.recipe import (
     JOB_ERR_CRASH,
@@ -58,13 +73,13 @@ from devkit.recipe import (
     STEP_ERR_CRASH,
     STEP_ERR_PROCEED,
     STEP_ERR_STOP,
+    EnvEntry,
     Job,
     Recipe,
     Step,
     bind_call_args,
     load_recipe,
     resolve_recipe_path,
-    resolve_step_env,
 )
 from devkit.system import detect_system
 from devkit.unpack import unpack_one
@@ -107,6 +122,8 @@ class RecipeRunner:
         self.job_filter = set(jobs) if jobs else None
         #: 是否有失败被 errskip 策略处理掉（构建最终仍以非 0 退出码结束）
         self.failed = False
+        #: 作业 system 表达式的求值缓存（避免同一次构建里重复求值）
+        self._job_system_cache: dict[tuple[Path, str], Any] = {}
 
     # ------------------------------------------------------------------ 入口
 
@@ -120,6 +137,126 @@ class RecipeRunner:
             top=True,
             env=None,
         )
+
+    def _get_expr_ns(self, recipe: Recipe):
+        return get_builtin_namespace(recipe.path, self.system)
+
+    def _effective_expr(self, recipe: Recipe, job: Job | None = None, step: Step | None = None):
+        return get_effective_expression(
+            recipe.expression,
+            job.expression if job is not None else None,
+            step.expression if step is not None else None,
+        )
+
+    def _job_system(self, recipe: Recipe, job: Job) -> Any:
+        """作业的 system 过滤值；表达式只求值一次并缓存。"""
+        key = (recipe.path, job.name)
+        if key not in self._job_system_cache:
+            system = job.system
+            if isinstance(system, str) and has_expression(system):
+                system = self._eval_value(system, recipe, job, None, "system")
+            self._job_system_cache[key] = system
+        return self._job_system_cache[key]
+
+    def _eval_value(
+        self,
+        value: Any,
+        recipe: Recipe,
+        job: Job | None = None,
+        step: Step | None = None,
+        feature: str = "",
+    ) -> Any:
+        """按生效的 expression 配置递归替换值中的表达式。"""
+        if not should_eval_expression(self._effective_expr(recipe, job, step), feature):
+            return value
+        return substitute_in_value(value, self._get_expr_ns(recipe), True)
+
+    def _eval_systems(
+        self, systems: tuple[str, ...] | None, ns: dict[str, Any]
+    ) -> tuple[str, ...] | None:
+        """替换 system 过滤项里的表达式；结果可以是单个字符串或字符串列表。"""
+        if not systems:
+            return systems
+        result: list[str] = []
+        for value in systems:
+            if not has_expression(value):
+                result.append(value)
+                continue
+            evaluated = substitute_expression(value, ns)
+            if isinstance(evaluated, (list, tuple)):
+                result.extend(str(item) for item in evaluated)
+            else:
+                result.append(str(evaluated))
+        return tuple(result)
+
+    def _eval_env_entries(
+        self,
+        entries: tuple[EnvEntry, ...],
+        recipe: Recipe,
+        effective,
+        feature: str,
+    ) -> tuple[EnvEntry, ...]:
+        """替换 env/area 项的 value（以及可选的 system 过滤）；值统一转成字符串。"""
+        eval_value = should_eval_expression(effective, feature)
+        eval_system = should_eval_expression(effective, "system")
+        if not entries or not (eval_value or eval_system):
+            return entries
+        ns = self._get_expr_ns(recipe)
+        result: list[EnvEntry] = []
+        for entry in entries:
+            systems = entry.systems
+            if eval_system and systems is not None:
+                systems = self._eval_systems(systems, ns)
+            value = entry.value
+            # 只对当前系统生效的项求值；给其他系统准备的表达式不应影响本次构建。
+            if (
+                eval_value
+                and (systems is None or self.system in systems)
+                and has_expression(value)
+            ):
+                value = str(substitute_expression(value, ns))
+            result.append(replace(entry, value=value, systems=systems))
+        return tuple(result)
+
+    def _resolve_env(
+        self,
+        recipe: Recipe,
+        job: Job,
+        step: Step,
+        inherited: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        """按配方 -> 作业 -> 步骤逐级叠加 env/area。
+
+        表达式按"当前步骤最终生效的 expression 配置"求值，因此上层开启的表达式
+        可以被下层的 ``false`` 关闭，下层也能重新开启。
+        """
+        effective = self._effective_expr(recipe, job, step)
+        result = dict(inherited) if inherited else {}
+        for env, area in (
+            (recipe.env, recipe.area),
+            (job.env, job.area),
+            (step.env, step.area),
+        ):
+            env = self._eval_env_entries(env, recipe, effective, "env")
+            if area is not None:
+                area = self._eval_env_entries(area, recipe, effective, "area")
+                result = self._merge_env({}, area)
+            else:
+                result = self._merge_env(result, env)
+        return result
+
+    def _eval_str(self, value: str, ns: dict[str, Any]) -> str:
+        if not has_expression(value):
+            return value
+        return str(substitute_expression(value, ns))
+
+    def _merge_env(
+        self, base: dict[str, str], entries: tuple[EnvEntry, ...]
+    ) -> dict[str, str]:
+        for entry in entries:
+            if entry.matches(self.system):
+                base[entry.key] = entry.value
+        return base
 
     # ----------------------------------------------------------------- 配方
 
@@ -143,6 +280,7 @@ class RecipeRunner:
 
         cwd = self._prepare(recipe, workdir=workdir, top=top)
         data = bind_call_args(recipe, args)
+        data = self._eval_value(data, recipe, feature="data")
 
         self._run_works(recipe, data=data, cwd=cwd, stack=stack, top=top, env=env)
 
@@ -177,23 +315,66 @@ class RecipeRunner:
 
     def _clone(self, recipe: Recipe, cwd: Path) -> None:
         assert recipe.material is not None
+        material = recipe.material
+        if should_eval_expression(self._effective_expr(recipe), "material"):
+            ns = self._get_expr_ns(recipe)
+            material = replace(
+                material,
+                repo=self._eval_str(material.repo, ns),
+                branch=(
+                    self._eval_str(material.branch, ns)
+                    if material.branch is not None
+                    else None
+                ),
+                commit=(
+                    self._eval_str(material.commit, ns)
+                    if material.commit is not None
+                    else None
+                ),
+            )
         target = cwd / _CLONE_SUBDIR
         if self.dry_run:
-            logger.info("dry-run: 跳过克隆 {} -> {}", recipe.material.repo, target)
+            logger.info("dry-run: 跳过克隆 {} -> {}", material.repo, target)
             return
-        ensure_clone(recipe.material, target)
+        ensure_clone(material, target)
+
+    def _eval_specs(self, specs, recipe: Recipe, feature: str, field: str):
+        """替换 download/unzip/unpack 项的 url/file 与 system 过滤。"""
+        effective = self._effective_expr(recipe)
+        eval_value = should_eval_expression(effective, feature)
+        eval_system = should_eval_expression(effective, "system")
+        if not specs or not (eval_value or eval_system):
+            return specs
+        ns = self._get_expr_ns(recipe)
+        result = []
+        for spec in specs:
+            systems = spec.systems
+            if eval_system and systems is not None:
+                systems = self._eval_systems(systems, ns)
+            value = getattr(spec, field)
+            if (
+                eval_value
+                and (systems is None or self.system in systems)
+                and has_expression(value)
+            ):
+                value = self._eval_str(value, ns)
+            result.append(replace(spec, **{field: value, "systems": systems}))
+        return tuple(result)
 
     def _run_downloads(self, recipe: Recipe) -> None:
-        for spec in recipe.downloads:
+        specs = self._eval_specs(recipe.downloads, recipe, "download", "url")
+        for spec in specs:
             download_one(spec, self.download_dir, self.system, dry_run=self.dry_run)
 
     def _run_unzips(self, recipe: Recipe, cwd: Path) -> None:
+        specs = self._eval_specs(recipe.unzips, recipe, "unzip", "file")
         bases = (recipe.dir, cwd / _CLONE_SUBDIR, cwd, self.download_dir)
-        for spec in recipe.unzips:
+        for spec in specs:
             unzip_one(spec, bases, self.download_dir, self.system, dry_run=self.dry_run)
 
     def _run_unpacks(self, recipe: Recipe) -> None:
-        for spec in recipe.unpacks:
+        specs = self._eval_specs(recipe.unpacks, recipe, "unpack", "url")
+        for spec in specs:
             unpack_one(spec, self.download_dir, self.system, dry_run=self.dry_run)
 
     # ------------------------------------------------------------------ job
@@ -225,10 +406,9 @@ class RecipeRunner:
                 logger.info("-- 跳过工作流 {} (未被 --job 选中)", job.name)
                 cursor += 1
                 continue
-            if not job.matches(self.system):
-                logger.info(
-                    "-- 跳过工作流 {} (需要系统 {}，当前 {})", job.name, job.system, self.system
-                )
+            job_system = self._job_system(recipe, job)
+            if job_system is not None and job_system != self.system:
+                logger.info("-- 跳过工作流 {} (需要系统 {}，当前 {})", job.name, job_system, self.system)
                 cursor += 1
                 continue
             linked = [by_name[name] for name in job.linkup]
@@ -323,6 +503,10 @@ class RecipeRunner:
                 "并发运行期间不许交互式程序，请把它单独串行执行（不要和别的作业联动）"
             )
         if failures:
+            # 表达式错误优先级最高，不能被其他成员的普通失败掩盖。
+            for _member, exc in failures:
+                if isinstance(exc, ExpressionError):
+                    return self._handle_job_failure(job, exc, recipe=recipe)
             for member, exc in failures:  # 优先抛发起联动的作业的异常
                 if member is job:
                     return self._handle_job_failure(job, exc, recipe=recipe)
@@ -331,6 +515,10 @@ class RecipeRunner:
 
     def _handle_job_failure(self, job: Job, exc: BaseException, *, recipe: Recipe) -> None:
         """作业失败后按 ``job.errskip`` 收场；``proceed``/``skip`` 返回 None 继续下一个作业。"""
+        if isinstance(exc, ExpressionError):
+            # 表达式错误必须强制终止整个工作流，不能被 errskip 吞掉。
+            logger.error("作业 {} 表达式求值失败，终止整个构建", job.name)
+            raise exc
         if job.errskip == JOB_ERR_CRASH:
             logger.error("作业 {} 失败 (errskip:crash): {}", job.name, exc)
             raise exc.cause if isinstance(exc, JobStop) else exc
@@ -357,10 +545,10 @@ class RecipeRunner:
         env: dict[str, str] | None = None,
     ) -> str | None:
         """执行一个作业，返回要跳转到的作业名（None 表示继续下一个作业）。"""
-        if not job.matches(self.system):
-            logger.info("-- 跳过工作流 {} (需要系统 {}，当前 {})", job.name, job.system, self.system)
+        job_system = self._job_system(recipe, job)
+        if job_system is not None and job_system != self.system:
+            logger.info("-- 跳过工作流 {} (需要系统 {}，当前 {})", job.name, job_system, self.system)
             return None
-
         logger.info("-- 工作流: {}", job.name)
         steps = list(job.steps)
         index_of = {step.name: pos for pos, step in enumerate(steps)}
@@ -383,6 +571,17 @@ class RecipeRunner:
                 cursor += 1
                 continue
             explicit = False
+            step_system = step.system
+            if isinstance(step_system, str) and has_expression(step_system):
+                step_system = self._eval_value(step_system, recipe, job, step, "system")
+                if isinstance(step_system, str) and step_system != self.system:
+                    logger.info("  - 跳过步骤 {} (需要系统 {}，当前 {})", step.name, step_system, self.system)
+                    cursor += 1
+                    continue
+            elif isinstance(step.system, str) and step.system != self.system:
+                logger.info("  - 跳过步骤 {} (需要系统 {}，当前 {})", step.name, step.system, self.system)
+                cursor += 1
+                continue
 
             linked = [steps[index_of[name]] for name in step.linkup]
             try:
@@ -538,6 +737,10 @@ class RecipeRunner:
                 "说明它是交互式程序；已终止整个联动组。请把它单独串行执行（不要和别的步骤联动）。"
             )
         if failures:
+            # 表达式错误优先级最高：即使联动的其他成员只是普通失败，也必须整组中止。
+            for _member, exc in failures:
+                if isinstance(exc, ExpressionError):
+                    raise exc
             for member, exc in failures:  # 失败策略用发起联动的那个步骤的
                 if member is step:
                     raise exc
@@ -556,18 +759,28 @@ class RecipeRunner:
     ) -> None:
         logger.info("  * 步骤: {}", step.name)
 
-        step_env = resolve_step_env(recipe, job, step, self.system, inherited=env)
+        step_env = self._resolve_env(recipe, job, step, inherited=env)
         if step_env:
             logger.info("    环境: {}", "; ".join(f"{k}={v}" for k, v in step_env.items()))
 
+        effective_expr = self._effective_expr(recipe, job, step)
+        eval_run = should_eval_expression(effective_expr, "run")
+        eval_call = should_eval_expression(effective_expr, "call")
+        ns = self._get_expr_ns(recipe) if (eval_run or eval_call) else None
+
         for command in step.run:
             parts = [self._subst(token, data, recipe, step) for token in command]
+            if eval_run:
+                parts = [substitute_in_value(p, ns, True) for p in parts]
             if not parts or not str(parts[0]):
                 raise RecipeError(f"{recipe.path.name} 步骤 {step.name}: 指令不能为空")
             line = " ".join(str(part) for part in parts)
             self._exec_shell(line, cwd=cwd, recipe=recipe, step=step, env=step_env)
 
         for rel_path, args in step.call:
+            if eval_call:
+                rel_path = str(substitute_in_value(rel_path, ns, True))
+                args = substitute_in_value(args, ns, True)
             target = (recipe.dir / rel_path).resolve()
             if target.is_dir():
                 for name in RECIPE_NAMES:

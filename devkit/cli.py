@@ -71,6 +71,9 @@ def build_parser() -> argparse.ArgumentParser:
     system = subparsers.add_parser("system", help="打印当前检测到的系统标识")
     system.add_argument("-v", "--verbose", action="store_true", help="输出调试日志")
 
+    console = subparsers.add_parser("console", help="启动 devkit 表达式 REPL")
+    console.add_argument("-v", "--verbose", action="store_true", help="输出调试日志")
+
     return parser
 
 
@@ -112,7 +115,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
     # 允许省略 build 子命令: devkit recipe.json
-    known = {"build", "run", "system", "-h", "--help", "--version"}
+    known = {"build", "run", "system", "-h", "--help", "--version", "console"}
     if argv and argv[0] not in known and not argv[0].startswith("-"):
         argv.insert(0, "build")
 
@@ -128,6 +131,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "system":
         logger.info("当前系统: {}", detect_system())
         print(detect_system())
+        return 0
+    if args.command == "console":
+        import code
+        import importlib
+
+        from devkit.expr import get_builtin_namespace
+
+        ns = get_builtin_namespace(None, detect_system())
+        for module_name in (
+            "cli",
+            "recipe",
+            "runner",
+            "expr",
+            "system",
+            "git",
+            "dl",
+            "unzip",
+            "unpack",
+            "errors",
+            "guard",
+        ):
+            try:
+                ns[module_name] = importlib.import_module(f"devkit.{module_name}")
+            except ImportError:
+                pass
+        import devkit
+
+        ns["devkit"] = devkit
+        banner = "devkit console (type help() for help, exit() or Ctrl-D to exit)"
+        code.interact(banner=banner, local=ns)
         return 0
 
     try:

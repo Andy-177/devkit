@@ -179,6 +179,13 @@ data 里出现整数时，含义取决于配方如何被使用：
   例如 ``hello.json`` 的 ``data`` 是 ``["hi", 0]``，``0`` 位于下标 1，
   被 ``call: {"hello.json": ["hello"]}`` 调用后 data 变成 ``["hi", "hello"]``,
   于是 ``run: [["echo", 1]]`` 输出的就是传入的 ``hello``。
+
+``expression`` 字段可写在顶层、作业、步骤三处（默认关闭），打开后任意字符串里
+的 ``?!{{python_expression}}`` 会在运行时求值（完整 builtins，另含
+``get_recipe_path()`` / ``get_system_info()``）。``true`` 开启全部，字符串列表是
+功能/字段白名单（``material``/``clone``、``download``、``unzip``、``unpack``、
+``env``、``area``、``data``、``system``、``run``、``call``），``false`` 关闭并
+覆盖上层。求值失败会强制终止整个工作流，不受 ``errskip`` 影响。
 """
 
 from __future__ import annotations
@@ -191,6 +198,7 @@ from typing import Any
 from loguru import logger
 
 from devkit.errors import RecipeError
+from devkit.expr import get_effective_expression, should_eval_expression
 
 #: 目录形式的配方路径会依次尝试这些文件名
 RECIPE_NAMES = ("recipe.json",)
@@ -215,9 +223,9 @@ DEFAULT_STEP_ERRSKIP = STEP_ERR_STOP
 #: 作业 errskip 缺省: 终止出错的作业，联动的作业跑完再继续下一个作业
 DEFAULT_JOB_ERRSKIP = JOB_ERR_PROCEED
 
-_KNOWN_TOP_KEYS = {"material", "download", "unzip", "unpack", "env", "area", "data", "jobs"}
+_KNOWN_TOP_KEYS = {"material", "download", "unzip", "unpack", "env", "area", "data", "jobs", "expression"}
 _KNOWN_MATERIAL_KEYS = {"repo", "branch", "depth", "commit"}
-_KNOWN_JOB_KEYS = {"system", "env", "area", "steps", "skip", "linkup", "errskip"}
+_KNOWN_JOB_KEYS = {"system", "env", "area", "steps", "skip", "linkup", "errskip", "expression"}
 _KNOWN_STEP_KEYS = {
     "run",
     "call",
@@ -229,6 +237,8 @@ _KNOWN_STEP_KEYS = {
     "jump",
     "next",
     "if",
+    "system",
+    "expression",
 }
 _KNOWN_IF_KEYS = {"error", "success", "jump", "redirect"}
 _KNOWN_ENV_KEYS = {"key", "value", "system"}
@@ -333,6 +343,8 @@ class Step:
     jump: str | None = None
     next: str | None = None
     when: StepIf = StepIf()
+    system: str | None = None
+    expression: bool | tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -347,6 +359,7 @@ class Job:
     skip: bool = False
     linkup: tuple[str, ...] = ()
     errskip: str = DEFAULT_JOB_ERRSKIP
+    expression: bool | tuple[str, ...] | None = None
 
     def matches(self, system: str) -> bool:
         return self.system is None or self.system == system
@@ -365,6 +378,7 @@ class Recipe:
     area: tuple[EnvEntry, ...] | None = None
     data: tuple[Any, ...] = ()
     jobs: tuple[Job, ...] = field(default_factory=tuple)
+    expression: bool | tuple[str, ...] | None = None
 
     @property
     def dir(self) -> Path:
@@ -437,6 +451,38 @@ def _parse_material(raw: Any, where: str) -> Material | None:
             raise RecipeError(f"{where}.depth 不能为负数")
         depth = depth or None
     return Material(repo=repo.strip(), branch=branch, depth=depth, commit=commit)
+
+
+def _parse_expression(raw: Any, where: str) -> bool | tuple[str, ...] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, list):
+        if not all(isinstance(v, str) for v in raw):
+            raise RecipeError(f"{where} 必须是字符串列表")
+        return tuple(raw)
+    raise RecipeError(f"{where} 必须是 true/false 或字符串列表")
+
+
+def is_expression_enabled(
+    expression: bool | tuple[str, ...] | None,
+    feature: str,
+    recipe_expr: bool | tuple[str, ...] | None = None,
+    job_expr: bool | tuple[str, ...] | None = None,
+) -> bool:
+    """判断某个功能/字段是否启用表达式。
+
+    当前作用域的 ``expression`` 为 ``None`` 时向上继承 ``job_expr`` / ``recipe_expr``。
+    ``None`` 表示继承上级，``True`` 表示全部开启，列表表示白名单，``False`` 表示关闭。
+    ``material`` 对应 ``clone`` 功能。
+    """
+    effective = expression
+    if effective is None:
+        effective = job_expr
+    if effective is None:
+        effective = recipe_expr
+    return should_eval_expression(effective, feature)
 
 
 def _parse_system_filter(value: Any, where: str) -> tuple[str, ...] | None:
@@ -700,6 +746,7 @@ def _parse_steps(raw: Any, where: str) -> tuple[Step, ...]:
             raise RecipeError(f"{step_where}.linkup 不能联动自己")
         if len(set(linkup)) != len(linkup):
             raise RecipeError(f"{step_where}.linkup 里有重复的步骤")
+        system = _optional_str(body.get("system"), f"{step_where}.system")
         steps.append(
             Step(
                 name=name,
@@ -718,6 +765,8 @@ def _parse_steps(raw: Any, where: str) -> tuple[Step, ...]:
                 jump=_parse_step_name(body.get("jump"), f"{step_where}.jump"),
                 next=_parse_next(body.get("next"), f"{step_where}.next", "next" in body),
                 when=_parse_step_if(body.get("if"), f"{step_where}.if"),
+                system=system,
+                expression=_parse_expression(body.get("expression"), f"{step_where}.expression"),
             )
         )
     return tuple(steps)
@@ -757,6 +806,7 @@ def _parse_jobs(raw: Any, where: str) -> tuple[Job, ...]:
                     JOB_ERR_LEVELS,
                     DEFAULT_JOB_ERRSKIP,
                 ),
+                expression=_parse_expression(body.get("expression"), f"{job_where}.expression"),
             )
         )
     names = {job.name for job in jobs}
@@ -779,6 +829,7 @@ def _parse_recipe(path: Path, raw: dict) -> Recipe:
         area=_parse_env_block(raw.get("area"), "area"),
         data=tuple(raw.get("data") or ()),
         jobs=_parse_jobs(raw.get("jobs"), "jobs"),
+        expression=_parse_expression(raw.get("expression"), "expression"),
     )
 
 
