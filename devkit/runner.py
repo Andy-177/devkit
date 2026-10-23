@@ -36,6 +36,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -63,6 +64,7 @@ from devkit.recipe import (
     bind_call_args,
     load_recipe,
     resolve_recipe_path,
+    resolve_step_env,
 )
 from devkit.system import detect_system
 from devkit.unpack import unpack_one
@@ -375,7 +377,15 @@ class RecipeRunner:
 
             linked = [steps[index_of[name]] for name in step.linkup]
             try:
-                self._run_step(step, linked=linked, recipe=recipe, data=data, cwd=cwd, stack=stack)
+                self._run_step(
+                    step,
+                    linked=linked,
+                    recipe=recipe,
+                    job=job,
+                    data=data,
+                    cwd=cwd,
+                    stack=stack,
+                )
             except InteractiveInputError:
                 raise
             except StepError as exc:
@@ -470,13 +480,14 @@ class RecipeRunner:
         *,
         linked: list[Step],
         recipe: Recipe,
+        job: Job,
         data: list[Any],
         cwd: Path,
         stack: tuple[Path, ...],
     ) -> None:
         """执行一个步骤；有 linkup 时和联动的步骤并发执行。"""
         if not linked:
-            self._run_step_own(step, recipe=recipe, data=data, cwd=cwd, stack=stack)
+            self._run_step_own(step, recipe=recipe, job=job, data=data, cwd=cwd, stack=stack)
             return
 
         members = [step, *linked]
@@ -488,7 +499,13 @@ class RecipeRunner:
             with ThreadPoolExecutor(max_workers=len(members)) as pool:
                 futures = {
                     pool.submit(
-                        self._run_step_own, member, recipe=recipe, data=data, cwd=cwd, stack=stack
+                        self._run_step_own,
+                        member,
+                        recipe=recipe,
+                        job=job,
+                        data=data,
+                        cwd=cwd,
+                        stack=stack,
                     ): member
                     for member in members
                 }
@@ -517,18 +534,23 @@ class RecipeRunner:
         step: Step,
         *,
         recipe: Recipe,
+        job: Job,
         data: list[Any],
         cwd: Path,
         stack: tuple[Path, ...],
     ) -> None:
         logger.info("  * 步骤: {}", step.name)
 
+        env = resolve_step_env(recipe, job, step, self.system)
+        if env:
+            logger.info("    环境: {}", "; ".join(f"{k}={v}" for k, v in env.items()))
+
         for command in step.run:
             parts = [self._subst(token, data, recipe, step) for token in command]
             if not parts or not str(parts[0]):
                 raise RecipeError(f"{recipe.path.name} 步骤 {step.name}: 指令不能为空")
             line = " ".join(str(part) for part in parts)
-            self._exec_shell(line, cwd=cwd, recipe=recipe, step=step)
+            self._exec_shell(line, cwd=cwd, recipe=recipe, step=step, env=env)
 
         for rel_path, args in step.call:
             target = (recipe.dir / rel_path).resolve()
@@ -587,13 +609,21 @@ class RecipeRunner:
                 returncode=returncode,
             )
 
-    def _exec_shell(self, line: str, *, cwd: Path, recipe: Recipe, step: Step) -> None:
+    def _exec_shell(
+        self,
+        line: str,
+        *,
+        cwd: Path,
+        recipe: Recipe,
+        step: Step,
+        env: dict[str, str] | None = None,
+    ) -> None:
         """执行一条 shell 命令行（由命令片段拼成，或来自无法解析成程序的命令）。"""
         logger.info("    $ {}   (cwd: {}, shell)", line, cwd)
         if self.dry_run:
             return
 
-        returncode = self._spawn(line, cwd=cwd, recipe=recipe, step=step, pretty=line)
+        returncode = self._spawn(line, cwd=cwd, recipe=recipe, step=step, pretty=line, env=env)
         if returncode != 0:
             raise StepError(
                 f"{recipe.path.name} 步骤 {step.name}: 指令失败 (退出码 {returncode}): {line}",
@@ -608,19 +638,24 @@ class RecipeRunner:
         recipe: Recipe,
         step: Step,
         pretty: str,
+        env: dict[str, str] | None = None,
     ) -> int:
         """启动指令并等它结束，返回退出码。
 
         ``command`` 是字符串时交给系统 shell 执行，是列表时直接启动。
+        ``env`` 是配方声明的环境变量增量，会叠加在进程自身环境之上。
         并发运行（联动）期间用 ``guard`` 的哨兵 stdin（并让子进程脱离控制台输入），
         这样交互式程序不会卡住整个构建，而是被守卫发现后整组杀掉。
         """
         shell = isinstance(command, str)
         display = command if shell else command[0]
+        full_env = {**os.environ, **env} if env else None
         stdin_guard = guard.current()
         if stdin_guard is None:
             try:
-                return subprocess.run(command, cwd=str(cwd), shell=shell).returncode
+                return subprocess.run(
+                    command, cwd=str(cwd), shell=shell, env=full_env
+                ).returncode
             except OSError as exc:
                 raise StepError(
                     f"{recipe.path.name} 步骤 {step.name}: 无法执行 {display}: {exc}"
@@ -634,6 +669,7 @@ class RecipeRunner:
                 stdin=stream,
                 shell=shell,
                 creationflags=_NO_WINDOW,
+                env=full_env,
             )
         except OSError as exc:
             stream.close()

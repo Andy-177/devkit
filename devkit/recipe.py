@@ -24,12 +24,18 @@
         {"url": "https://example.com/win.zip",
          "system": "win_amd64", "extract": true}           # 仅系统匹配才下载解压
       ],
+      "env": [
+        {"key": "hello", "value": "world"},                # 全局环境变量
+        {"key": "world", "value": "hello;world",
+         "system": "win_arm64"}                            # 仅系统匹配的项才生效
+      ],
       "data": ["build.sh", 0],
       "jobs": {
         "build-windows": {
           "system": "win_amd64",          # 与当前系统不一致则跳过该工作流
           "skip": true,                   # 顺序走到这个作业时跳过它（被 next/linkup 指到时仍执行）
           "linkup": "prepare",            # 联动: 和 prepare 一起并发执行（字符串或列表）
+          "env": [{"key": "CC", "value": "clang"}],   # 覆盖合并到全局 env 上
           "steps": {
             "init-msys2": {
               "run": [
@@ -37,6 +43,7 @@
                 ["buildsh.bat", "-c", 0],   # 数字表示引用 data 中对应下标的数据
                 ["echo hello"]              # 一条命令（解析不出程序就交给 shell）
               ],
+              "env": [{"key": "CC", "value": "gcc"}],  # 再覆盖合并到 job 的 env 上
               "call": {
                 "hello.json": ["hello"]   # 相对本配方文件的路径 + 传入的参数列表
               }
@@ -139,6 +146,32 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
 并发子进程去读 stdin，就说明这个程序需要人输入，devkit 会立刻杀掉整个联动组并报错。
 交互式程序请不要联动（不联动就会继承真正的终端，交互正常）。
 
+环境变量用 ``env`` 块声明（可选），可以放在三处：顶层（与 ``download`` 平级）、
+作业内（与 ``system`` 平级）、步骤内（与 ``run`` 平级）。格式是一个列表::
+
+    "env": [
+        {"key": "hello", "value": "world"},
+        {"key": "world", "value": "hello;world", "system": "win_arm64"}
+    ]
+
+每项 ``key`` 必填且非空，``value`` 必填（字符串，可为空串），``system`` 可选（字符串
+或字符串列表，缺省对所有系统生效，只有当前系统匹配的项才参与合并）。合并规则：
+
+* 从全局 env 起底；作业的 env 覆盖合并到全局 env 上（同 key 覆盖，异 key 合并）；
+  步骤的 env 再覆盖合并到作业层的结果上；
+* 同样的 key，低层覆盖高层；同一个块内重复的 key，后出现的覆盖先出现的；
+* 合并后的环境变量只增量叠加在进程自身环境之上，最后交给每个 ``run`` 的子进程。
+
+``area`` 是 ``env`` 的变种，优先级更高，**只能在作业和步骤里用**。它是一条
+"强制隔离线"，会完全忽略上层已经算好的 env 和 area：
+
+* 作业里写 ``area``：该作业完全忽略全局 env，作业内所有步骤默认加载作业的 area；
+* 步骤里写 ``area``：该步骤的 ``run`` 完全忽略作业层的（env 或 area）结果，
+  只用自身 area；
+* 一个块里 ``area`` 和 ``env`` 同时存在时，只有 ``area`` 生效，``env`` 被丢弃；
+* 一旦作业用了 ``area``，它下面没写 ``area`` 的步骤，其 ``env`` 也不再生效
+  （除非该步骤自己带了 ``area``）。
+
 data 里出现整数时，含义取决于配方如何被使用：
 
 * 顶层配方: 整数是普通数据，``run`` 中用下标引用它；
@@ -182,11 +215,23 @@ DEFAULT_STEP_ERRSKIP = STEP_ERR_STOP
 #: 作业 errskip 缺省: 终止出错的作业，联动的作业跑完再继续下一个作业
 DEFAULT_JOB_ERRSKIP = JOB_ERR_PROCEED
 
-_KNOWN_TOP_KEYS = {"material", "download", "unzip", "unpack", "data", "jobs"}
+_KNOWN_TOP_KEYS = {"material", "download", "unzip", "unpack", "env", "data", "jobs"}
 _KNOWN_MATERIAL_KEYS = {"repo", "branch", "depth", "commit"}
-_KNOWN_JOB_KEYS = {"system", "steps", "skip", "linkup", "errskip"}
-_KNOWN_STEP_KEYS = {"run", "call", "skip", "errskip", "linkup", "jump", "next", "if"}
+_KNOWN_JOB_KEYS = {"system", "env", "area", "steps", "skip", "linkup", "errskip"}
+_KNOWN_STEP_KEYS = {
+    "run",
+    "call",
+    "env",
+    "area",
+    "skip",
+    "errskip",
+    "linkup",
+    "jump",
+    "next",
+    "if",
+}
 _KNOWN_IF_KEYS = {"error", "success", "jump", "redirect"}
+_KNOWN_ENV_KEYS = {"key", "value", "system"}
 
 
 @dataclass(frozen=True)
@@ -243,6 +288,21 @@ class UnpackSpec:
 
 
 @dataclass(frozen=True)
+class EnvEntry:
+    """一条环境变量: ``key=value``，可带系统过滤。
+
+    ``systems`` 为 None 表示对所有系统生效。仅当当前系统匹配时才参与环境合并。
+    """
+
+    key: str
+    value: str
+    systems: tuple[str, ...] | None = None
+
+    def matches(self, system: str) -> bool:
+        return self.systems is None or system in self.systems
+
+
+@dataclass(frozen=True)
 class StepIf:
     """步骤的 ``if``：失败/成功后的去向，以及全局跳转/重定向表。"""
 
@@ -265,6 +325,8 @@ class Step:
     name: str
     run: tuple[tuple[Any, ...], ...] = ()
     call: tuple[tuple[str, tuple[Any, ...]], ...] = ()
+    env: tuple[EnvEntry, ...] = ()
+    area: tuple[EnvEntry, ...] | None = None
     skip: bool = False
     errskip: str = DEFAULT_STEP_ERRSKIP
     linkup: tuple[str, ...] = ()
@@ -279,6 +341,8 @@ class Job:
 
     name: str
     system: str | None = None
+    env: tuple[EnvEntry, ...] = ()
+    area: tuple[EnvEntry, ...] | None = None
     steps: tuple[Step, ...] = ()
     skip: bool = False
     linkup: tuple[str, ...] = ()
@@ -297,6 +361,7 @@ class Recipe:
     downloads: tuple[DownloadSpec, ...] = ()
     unzips: tuple[UnzipSpec, ...] = ()
     unpacks: tuple[UnpackSpec, ...] = ()
+    env: tuple[EnvEntry, ...] = ()
     data: tuple[Any, ...] = ()
     jobs: tuple[Job, ...] = field(default_factory=tuple)
 
@@ -381,6 +446,45 @@ def _parse_system_filter(value: Any, where: str) -> tuple[str, ...] | None:
     if isinstance(value, list) and all(isinstance(v, str) for v in value):
         return tuple(value) or None
     raise RecipeError(f"{where} 必须是字符串或字符串列表")
+
+
+def _parse_env_block(raw: Any, where: str) -> tuple[EnvEntry, ...] | None:
+    """解析 env/area 环境块。
+
+    格式是一个列表，每项是 ``{"key": ..., "value": ..., "system": ...}``::
+
+        "env": [
+            {"key": "hello", "value": "world"},
+            {"key": "world", "value": "hello;world", "system": "win_arm64"}
+        ]
+
+    ``key`` 必填且非空，``value`` 必填（字符串，可为空串），``system`` 可选
+    （字符串或字符串列表，缺省对所有系统生效）。返回 None 表示字段不存在
+    （仅用于 ``area`` 区分"没写"和"写成空列表"）。
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise RecipeError(f"{where} 必须是列表")
+    entries: list[EnvEntry] = []
+    for index, item in enumerate(raw):
+        item_where = f"{where}[{index}]"
+        if not isinstance(item, dict):
+            raise RecipeError(f"{item_where} 必须是对象 (如 {{\"key\": ..., \"value\": ...}})")
+        for key in item:
+            if key not in _KNOWN_ENV_KEYS:
+                raise RecipeError(
+                    f"{item_where} 不认识的字段 {key!r}（只能是 key/value/system）"
+                )
+        key = item.get("key")
+        if not isinstance(key, str) or not key:
+            raise RecipeError(f"{item_where}.key 必填且必须是非空字符串")
+        value = item.get("value")
+        if not isinstance(value, str):
+            raise RecipeError(f"{item_where}.value 必填且必须是字符串")
+        systems = _parse_system_filter(item.get("system"), f"{item_where}.system")
+        entries.append(EnvEntry(key=key, value=value, systems=systems))
+    return tuple(entries)
 
 
 def _parse_spec_list(
@@ -600,6 +704,8 @@ def _parse_steps(raw: Any, where: str) -> tuple[Step, ...]:
                 name=name,
                 run=_parse_run(body.get("run"), f"{step_where}.run"),
                 call=_parse_call(body.get("call"), f"{step_where}.call"),
+                env=_parse_env_block(body.get("env"), f"{step_where}.env") or (),
+                area=_parse_env_block(body.get("area"), f"{step_where}.area"),
                 skip=_parse_bool(body.get("skip"), f"{step_where}.skip"),
                 errskip=_parse_level(
                     body.get("errskip"),
@@ -639,6 +745,8 @@ def _parse_jobs(raw: Any, where: str) -> tuple[Job, ...]:
             Job(
                 name=name,
                 system=system or None,
+                env=_parse_env_block(body.get("env"), f"{job_where}.env") or (),
+                area=_parse_env_block(body.get("area"), f"{job_where}.area"),
                 steps=_parse_steps(body.get("steps"), f"{job_where}.steps"),
                 skip=_parse_bool(body.get("skip"), f"{job_where}.skip"),
                 linkup=linkup,
@@ -666,9 +774,48 @@ def _parse_recipe(path: Path, raw: dict) -> Recipe:
         downloads=_parse_download(raw.get("download"), "download"),
         unzips=_parse_unzip(raw.get("unzip"), "unzip"),
         unpacks=_parse_unpack(raw.get("unpack"), "unpack"),
+        env=_parse_env_block(raw.get("env"), "env") or (),
         data=tuple(raw.get("data") or ()),
         jobs=_parse_jobs(raw.get("jobs"), "jobs"),
     )
+
+
+def _merge_env(base: dict[str, str], entries: tuple[EnvEntry, ...], system: str) -> dict[str, str]:
+    """把匹配当前系统的环境项覆盖合并进 ``base``（原地修改并返回）。"""
+    for entry in entries:
+        if entry.matches(system):
+            base[entry.key] = entry.value
+    return base
+
+
+def resolve_step_env(recipe: Recipe, job: Job, step: Step, system: str) -> dict[str, str]:
+    """计算一个步骤最终生效的环境变量。
+
+    合并顺序与规则::
+
+    * 从全局 env 起底；
+    * job 若声明了 ``area``，则完全忽略全局 env，改用 job 的 area；否则把 job 的
+      ``env`` 覆盖合并到当前结果上；
+    * step 若声明了 ``area``，则完全忽略 job 层的结果，改用 step 的 area；否则，
+      只有在 job 没有 ``area`` 时才把 step 的 ``env`` 覆盖合并上去（job 一旦用了
+      area，其下所有 step 的 ``env`` 都不再生效）；
+    * 同一个块内重复的 key，后出现的覆盖先出现的。
+
+    返回 ``key -> value`` 的字典，供 ``subprocess`` 使用。
+    """
+    result: dict[str, str] = {}
+    if job.area is not None:
+        _merge_env(result, job.area, system)
+    else:
+        _merge_env(result, recipe.env, system)
+        _merge_env(result, job.env, system)
+
+    if step.area is not None:
+        result = {}
+        _merge_env(result, step.area, system)
+    elif job.area is None:
+        _merge_env(result, step.env, system)
+    return result
 
 
 def bind_call_args(recipe: Recipe, args: list[Any] | tuple[Any, ...] | None) -> list[Any]:

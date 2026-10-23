@@ -558,5 +558,70 @@ class TestSpawnInternals(RunnerTestCase):
         self.assertEqual(resolve("not-here.bin", self.tmp), "not-here.bin")
 
 
+class TestEnvExecution(RunnerTestCase):
+    def _dump_env(self, name: str, var: str) -> list[str]:
+        code = f"import os;open('{name}','w').write(os.environ.get('{var}',''))"
+        return py_command(code)
+
+    def test_global_env_reaches_subprocess(self):
+        raw = {
+            "env": [{"key": "DK_GLOBAL", "value": "g-value"}],
+            "jobs": {"main": {"steps": {"s": {
+                "run": [self._dump_env("out.txt", "DK_GLOBAL")]}}}},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        self.assertEqual(_common.read(self.workdir / "out.txt"), "g-value")
+
+    def test_step_env_overrides_job_and_global(self):
+        raw = {
+            "env": [{"key": "DK_X", "value": "global"}],
+            "jobs": {"main": {
+                "env": [{"key": "DK_X", "value": "job"}],
+                "steps": {"s": {
+                    "run": [self._dump_env("out.txt", "DK_X")],
+                    "env": [{"key": "DK_X", "value": "step"}],
+                }},
+            }},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        self.assertEqual(_common.read(self.workdir / "out.txt"), "step")
+
+    def test_job_env_overrides_global(self):
+        raw = {
+            "env": [{"key": "DK_X", "value": "global"}],
+            "jobs": {"main": {
+                "env": [{"key": "DK_X", "value": "job"}],
+                "steps": {"s": {"run": [self._dump_env("out.txt", "DK_X")]}},
+            }},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        self.assertEqual(_common.read(self.workdir / "out.txt"), "job")
+
+    def test_job_area_ignores_global_env(self):
+        raw = {
+            "env": [{"key": "DK_X", "value": "global"}],
+            "jobs": {"main": {
+                "area": [{"key": "DK_Y", "value": "area"}],
+                "steps": {"s": {"run": [
+                    self._dump_env("x.txt", "DK_X"),
+                    self._dump_env("y.txt", "DK_Y"),
+                ]}},
+            }},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        self.assertEqual(_common.read(self.workdir / "x.txt"), "")
+        self.assertEqual(_common.read(self.workdir / "y.txt"), "area")
+
+    def test_existing_process_env_kept(self):
+        raw = {
+            "env": [{"key": "DK_NEW", "value": "v"}],
+            "jobs": {"main": {"steps": {"s": {
+                "run": [self._dump_env("out.txt", "PATH")]}}}},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        dumped = _common.read(self.workdir / "out.txt")
+        self.assertTrue(dumped)  # 配方 env 是增量，不应清掉进程已有的 PATH
+
+
 if __name__ == "__main__":
     unittest.main()

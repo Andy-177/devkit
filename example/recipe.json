@@ -15,15 +15,30 @@
     "https://example.com/bundle.zip",
     { "url": "https://example.com/win-tools.zip", "system": "win_amd64", "extract": true }
   ],
+  "env": [
+    { "key": "hello", "value": "world" },
+    { "key": "world", "value": "hello;world", "system": "win_arm64" }
+  ],
   "data": ["build.sh"],
   "jobs": {
     "main": {
+      "env": [{ "key": "CC", "value": "clang" }],
       "steps": {
         "call-hello": {
           "call": { "hello.json": ["world"] }
         },
         "banner": {
-          "run": [["echo", "build start"]]
+          "run": [["echo", "build start"]],
+          "env": [{ "key": "CC", "value": "gcc" }]
+        }
+      }
+    },
+    "isolated": {
+      "skip": true,
+      "area": [{ "key": "PATH_EXTRA", "value": "toolchain" }],
+      "steps": {
+        "show": {
+          "run": [["echo", "isolated env"]]
         }
       }
     }

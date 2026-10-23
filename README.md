@@ -113,10 +113,15 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
     "https://example.com/bundle.zip",
     {"url": "https://example.com/win-tools.zip", "system": "win_amd64", "extract": true}
   ],
+  "env": [
+    {"key": "hello", "value": "world"},
+    {"key": "world", "value": "hello;world", "system": "win_arm64"}
+  ],
   "data": ["build.sh", 0],
   "jobs": {
     "build-windows": {
       "system": "win_amd64",
+      "env": [{"key": "CC", "value": "clang"}],
       "steps": {
         "init": {
           "run": [
@@ -124,6 +129,7 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
             ["buildsh.bat", "-c", 0],
             ["echo hello > out.txt"]
           ],
+          "env": [{"key": "CC", "value": "gcc"}],
           "call": {"hello.json": ["hello"]}
         }
       }
@@ -155,6 +161,33 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
     顺序查找；`unpack` 先把 zip 下载到 `<下载目录>/.dkcache` 缓存，再解压释放；
   * 两者都解压到下载目录（默认 `.devkit`），含 zip-slip 防护。
 
+### env / area 环境块（可选）
+
+`env` 可以放在三处：全局（与 `download` 平级）、作业内（与 `system` 平级）、
+步骤内（与 `run` 平级）。格式是列表，每项 `key`/`value` 必填，`system` 可选：
+
+```json
+"env": [
+  {"key": "hello", "value": "world"},
+  {"key": "world", "value": "hello;world", "system": "win_arm64"}
+]
+```
+
+`system` 是单个字符串或列表，缺省对所有系统生效，只有当前系统匹配的项才参与合并。
+
+合并规则（低层覆盖高层，同 key 覆盖、异 key 合并；同块内重复 key 后者覆盖前者）：
+
+* 全局 env -> 作业 env 覆盖合并 -> 步骤 env 再覆盖合并；
+* 最终结果增量叠加在进程自身环境之上，只作用于该步骤每个 `run` 子进程。
+
+`area` 是 `env` 的变种，**只能在作业和步骤里用**，是一条"强制隔离线"，会完全忽略
+上层已经算好的 env 和 area：
+
+* 作业里写 `area`：该作业完全忽略全局 env，作业内所有步骤默认加载作业的 `area`；
+* 步骤里写 `area`：该步骤的 `run` 完全忽略作业层的（env 或 area）结果，只用自身 `area`；
+* 一个块里 `area` 和 `env` 同时存在时，只有 `area` 生效，`env` 被丢弃；
+* 一旦作业用了 `area`，它下面没写 `area` 的步骤，其 `env` 也不再生效（除非该步骤
+  自己带了 `area`）。
 
 ### run 与 data
 

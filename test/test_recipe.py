@@ -12,6 +12,7 @@ from devkit.errors import RecipeError
 from devkit.recipe import (
     NEXT_JOB,
     DownloadSpec,
+    EnvEntry,
     Job,
     Material,
     Recipe,
@@ -21,6 +22,7 @@ from devkit.recipe import (
     bind_call_args,
     load_recipe,
     resolve_recipe_path,
+    resolve_step_env,
 )
 from _common import write_recipe
 
@@ -476,6 +478,165 @@ class TestBindCallArgs(unittest.TestCase):
     def test_no_args_needed(self):
         recipe = self._recipe(["plain"])
         self.assertEqual(bind_call_args(recipe, []), ["plain"])
+
+
+class TestEnvBlock(unittest.TestCase):
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name)
+        self.addCleanup(self._td.cleanup)
+
+    def _load(self, raw: dict) -> Recipe:
+        return load_recipe(write_recipe(self.tmp, raw))
+
+    def test_global_env_parsing(self):
+        recipe = self._load({"env": [
+            {"key": "hello", "value": "world"},
+            {"key": "world", "value": "hello;world", "system": "win_arm64"},
+            {"key": "empty", "value": ""},
+        ]})
+        self.assertEqual(recipe.env, (
+            EnvEntry("hello", "world"),
+            EnvEntry("world", "hello;world", ("win_arm64",)),
+            EnvEntry("empty", ""),
+        ))
+
+    def test_absent_env_is_empty_tuple(self):
+        recipe = self._load({})
+        self.assertEqual(recipe.env, ())
+        self.assertIsNone(recipe.jobs[0].area if recipe.jobs else None)
+
+    def test_job_and_step_env_and_area(self):
+        recipe = self._load({"jobs": {"j": {
+            "env": [{"key": "CC", "value": "clang"}],
+            "area": [{"key": "ONLY", "value": "1"}],
+            "steps": {"s": {
+                "env": [{"key": "CC", "value": "gcc"}],
+                "area": [{"key": "ISO", "value": "2"}],
+            }},
+        }}})
+        job = recipe.jobs[0]
+        self.assertEqual(job.env, (EnvEntry("CC", "clang"),))
+        self.assertEqual(job.area, (EnvEntry("ONLY", "1"),))
+        step = job.steps[0]
+        self.assertEqual(step.env, (EnvEntry("CC", "gcc"),))
+        self.assertEqual(step.area, (EnvEntry("ISO", "2"),))
+
+    def test_bad_env_blocks(self):
+        for raw in (
+            {"env": "hello"},                                  # 非列表
+            {"env": [{"key": "hi"}]},                           # 缺 value
+            {"env": [{"value": "x"}]},                          # 缺 key
+            {"env": [{"key": "", "value": "x"}]},               # 空 key
+            {"env": [{"key": "k", "value": 5}]},                # value 非字符串
+            {"env": [{"key": "k", "value": "v", "x": 1}]},      # 未知字段
+            {"env": [{"key": "k", "value": "v", "system": 5}]}, # system 类型错误
+            {"env": ["hi"]},                                    # 项非对象
+        ):
+            with self.subTest(raw=raw), self.assertRaises(RecipeError):
+                self._load(raw)
+
+    def test_area_absent_is_none(self):
+        recipe = self._load({"jobs": {"j": {"steps": {"s": {}}}}})
+        self.assertIsNone(recipe.jobs[0].area)
+        self.assertIsNone(recipe.jobs[0].steps[0].area)
+
+
+class TestResolveStepEnv(unittest.TestCase):
+    def _recipe(self, raw: dict) -> Recipe:
+        with tempfile.TemporaryDirectory() as td:
+            return load_recipe(write_recipe(Path(td), raw))
+
+    def _one(self, raw: dict, system: str = "win_amd64") -> dict[str, str]:
+        raw.setdefault("jobs", {"j": {"steps": {"s": {}}}})
+        recipe = self._recipe(raw)
+        job = recipe.jobs[0]
+        step = job.steps[0]
+        return resolve_step_env(recipe, job, step, system)
+
+    def test_global_only(self):
+        env = self._one({"env": [{"key": "A", "value": "1"}], "jobs": {"j": {"steps": {"s": {}}}}})
+        self.assertEqual(env, {"A": "1"})
+
+    def test_job_overrides_and_merges(self):
+        env = self._one({
+            "env": [{"key": "A", "value": "1"}, {"key": "B", "value": "2"}],
+            "jobs": {"j": {"env": [{"key": "B", "value": "22"}, {"key": "C", "value": "3"}],
+                           "steps": {"s": {}}}},
+        })
+        self.assertEqual(env, {"A": "1", "B": "22", "C": "3"})
+
+    def test_step_overrides_and_merges(self):
+        env = self._one({
+            "env": [{"key": "A", "value": "1"}],
+            "jobs": {"j": {"env": [{"key": "A", "value": "11"}, {"key": "B", "value": "2"}],
+                           "steps": {"s": {"env": [{"key": "B", "value": "22"},
+                                                   {"key": "C", "value": "3"}]}}}},
+        })
+        self.assertEqual(env, {"A": "11", "B": "22", "C": "3"})
+
+    def test_system_filter(self):
+        raw = {"env": [{"key": "A", "value": "1", "system": "linux_amd64"},
+                       {"key": "B", "value": "2"}]}
+        self.assertEqual(self._one(raw, "win_amd64"), {"B": "2"})
+        self.assertEqual(self._one(raw, "linux_amd64"), {"A": "1", "B": "2"})
+
+    def test_later_duplicate_key_wins(self):
+        env = self._one({"env": [{"key": "A", "value": "1"}, {"key": "A", "value": "2"}]})
+        self.assertEqual(env, {"A": "2"})
+
+    def test_job_area_ignores_global_env(self):
+        env = self._one({
+            "env": [{"key": "A", "value": "1"}],
+            "jobs": {"j": {"area": [{"key": "ONLY", "value": "x"}], "steps": {"s": {}}}},
+        })
+        self.assertEqual(env, {"ONLY": "x"})
+
+    def test_job_area_ignores_step_env_without_area(self):
+        env = self._one({
+            "env": [{"key": "A", "value": "1"}],
+            "jobs": {"j": {"area": [{"key": "ONLY", "value": "x"}],
+                           "steps": {"s": {"env": [{"key": "A", "value": "9"}]}}}},
+        })
+        self.assertEqual(env, {"ONLY": "x"})
+
+    def test_step_area_ignores_job_area(self):
+        env = self._one({
+            "jobs": {"j": {"area": [{"key": "JOB", "value": "1"}],
+                           "steps": {"s": {"area": [{"key": "STEP", "value": "2"}]}}}},
+        })
+        self.assertEqual(env, {"STEP": "2"})
+
+    def test_step_area_ignores_job_env(self):
+        env = self._one({
+            "jobs": {"j": {"env": [{"key": "JOB", "value": "1"}],
+                           "steps": {"s": {"area": [{"key": "STEP", "value": "2"}]}}}},
+        })
+        self.assertEqual(env, {"STEP": "2"})
+
+    def test_area_wins_over_same_block_env(self):
+        env = self._one({
+            "jobs": {"j": {"env": [{"key": "E", "value": "1"}],
+                           "area": [{"key": "A", "value": "2"}],
+                           "steps": {"s": {}}}},
+        })
+        self.assertEqual(env, {"A": "2"})
+
+    def test_step_area_wins_over_step_env(self):
+        env = self._one({
+            "jobs": {"j": {"steps": {"s": {
+                "env": [{"key": "E", "value": "1"}],
+                "area": [{"key": "A", "value": "2"}],
+            }}}},
+        })
+        self.assertEqual(env, {"A": "2"})
+
+    def test_empty_area_is_empty_env(self):
+        env = self._one({
+            "env": [{"key": "A", "value": "1"}],
+            "jobs": {"j": {"area": [], "steps": {"s": {}}}},
+        })
+        self.assertEqual(env, {})
 
 
 if __name__ == "__main__":
