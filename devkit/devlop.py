@@ -10,6 +10,7 @@ from __future__ import annotations
 import getpass
 import socket
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from devkit.errors import DevkitError
@@ -18,6 +19,72 @@ from devkit.runner import RecipeRunner
 
 #: 续行提示符（与 ``prompt_toolkit`` 的 prompt_continuation 对应）
 CONTINUATION = " ╰> "
+
+#: 无法读取用户配色时的默认值：全白
+DEFAULT_COLORS = ("#ffffff",) * 6
+
+
+def normalize_shell_colors(value: object) -> tuple[str, ...]:
+    """校验用户配色：必须是 6 个合法颜色的元组，否则返回全白。"""
+    if not isinstance(value, tuple) or len(value) != 6:
+        return DEFAULT_COLORS
+    if not all(isinstance(color, str) and color.strip() for color in value):
+        return DEFAULT_COLORS
+    colors = tuple(color.strip() for color in value)
+    try:
+        from prompt_toolkit.styles import Style
+
+        Style.from_dict({f"c{i}": f"fg:{color}" for i, color in enumerate(colors)})
+    except Exception:
+        return DEFAULT_COLORS
+    return colors
+
+
+def load_shell_colors(
+    color_func: Callable[[], object] | None = None,
+) -> tuple[str, ...]:
+    """读取 ``_color.py`` 的 ``devlop_shell_color()``；失败时返回全白。"""
+    if color_func is None:
+        try:
+            from devkit._color import devlop_shell_color as color_func
+        except Exception:
+            return DEFAULT_COLORS
+    try:
+        return normalize_shell_colors(color_func())
+    except Exception:
+        return DEFAULT_COLORS
+
+
+def prompt_fragments(
+    cwd: Path | str,
+    *,
+    user: str | None = None,
+    host: str | None = None,
+    colors: tuple[str, ...] | None = None,
+) -> list[tuple[str, str]]:
+    """按 ``(devlop, user@host, path, $, └─>, ╰>)`` 顺序给主提示符上色。"""
+    colors = colors or load_shell_colors()
+    path = Path(cwd).expanduser().resolve()
+    return [
+        (f"fg:{colors[0]}", "devlop"),
+        ("", " "),
+        (f"fg:{colors[1]}", f"{user or _username()}@{host or _hostname()}"),
+        ("", " "),
+        (f"fg:{colors[2]}", str(path)),
+        ("", " "),
+        (f"fg:{colors[3]}", "$"),
+        ("", "\n"),
+        (f"fg:{colors[4]}", "└─>"),
+        ("", " "),
+    ]
+
+
+def continuation_fragments(
+    colors: tuple[str, ...] | None = None,
+) -> list[tuple[str, str]]:
+    """续行提示符 `` ╰> ``，只给 ``╰>`` 上色。"""
+    colors = colors or load_shell_colors()
+    return [("", " "), (f"fg:{colors[5]}", "╰>"), ("", " ")]
 
 
 def _username() -> str:
@@ -74,6 +141,7 @@ class DevlopShell:
         self.env = dict(env or {})
         self.root = Path(workdir).expanduser().resolve() if workdir is not None else self.cwd
         self._previous_cwd: Path | None = None
+        self.colors = load_shell_colors()
 
     @property
     def prompt(self) -> str:
@@ -131,7 +199,6 @@ class DevlopShell:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.formatted_text import FormattedText
         from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.styles import Style
 
         bindings = KeyBindings()
 
@@ -144,18 +211,15 @@ class DevlopShell:
             event.current_buffer.insert_text("\n")
 
         def continuation(width: int, line_number: int, wrap_count: int) -> FormattedText:
-            return FormattedText([("class:prompt", CONTINUATION)])
+            return FormattedText(continuation_fragments(self.colors))
 
-        style = Style.from_dict({"prompt": "#ffffff"})
-        session = PromptSession(
-            style=style, key_bindings=bindings, input=input, output=output
-        )
+        session = PromptSession(key_bindings=bindings, input=input, output=output)
         print("devlop 终端：Enter 执行，Ctrl-J 换行，Ctrl-D 退出", file=sys.stderr)
 
         while True:
             try:
                 text = session.prompt(
-                    FormattedText([("class:prompt", self.prompt)]),
+                    FormattedText(prompt_fragments(self.cwd, colors=self.colors)),
                     multiline=True,
                     prompt_continuation=continuation,
                 )

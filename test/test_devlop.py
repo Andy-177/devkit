@@ -12,10 +12,12 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-from devkit import devlop
+from devkit import _color, devlop
 from devkit.cli import build_parser, main
 from devkit.devlop import DevlopShell, join_input_lines, prompt_text
 from _common import FAIL_CMD, PY_SPACED, echo_write, make_runner, write_recipe
+
+CHERRY = ("#e09bff", "#8a52bc", "#6b73ad", "#cc87eb", "#6b73ad", "#6b73ad")
 
 
 def make_zip(path: Path, members: dict[str, str]) -> Path:
@@ -54,6 +56,63 @@ class TestPrompt(DevlopTestCase):
         self.assertEqual(join_input_lines("cd\n/?\n"), "cd /?")
         self.assertEqual(join_input_lines("  \n\n"), "")
         self.assertEqual(join_input_lines("echo\n\n hi "), "echo hi")
+
+
+class TestColor(DevlopTestCase):
+    def test_normalize_accepts_six_color_tuple(self):
+        self.assertEqual(devlop.normalize_shell_colors(CHERRY), CHERRY)
+
+    def test_normalize_strips_color_whitespace(self):
+        padded = tuple(f" {color} " for color in CHERRY)
+        self.assertEqual(devlop.normalize_shell_colors(padded), CHERRY)
+
+    def test_normalize_falls_back_to_white(self):
+        white = devlop.DEFAULT_COLORS
+        self.assertEqual(len(white), 6)
+        self.assertEqual(set(white), {"#ffffff"})
+
+        for value in (
+            list(CHERRY),
+            CHERRY[:5],
+            CHERRY + ("#ffffff",),
+            ("#ffffff", "#ffffff", "#ffffff", "#ffffff", "#ffffff", 1),
+            ("#ffffff", "#ffffff", "#ffffff", "#ffffff", "#ffffff", ""),
+            ("#ffffff", "#ffffff", "#ffffff", "#ffffff", "#ffffff", "not-a-color"),
+            "ffffff",
+            None,
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(devlop.normalize_shell_colors(value), white)
+
+    def test_load_reads_user_function(self):
+        self.assertEqual(devlop.load_shell_colors(lambda: CHERRY), CHERRY)
+
+    def test_load_falls_back_when_function_raises(self):
+        def boom():
+            raise RuntimeError("boom")
+
+        self.assertEqual(devlop.load_shell_colors(boom), devlop.DEFAULT_COLORS)
+
+    def test_load_reads_color_file(self):
+        self.assertEqual(
+            devlop.load_shell_colors(),
+            devlop.normalize_shell_colors(_color.devlop_shell_color()),
+        )
+
+    def test_prompt_fragments_use_all_six_colors(self):
+        fragments = devlop.prompt_fragments(
+            self.tmp, user="u", host="h", colors=CHERRY
+        )
+        self.assertIn(("fg:#e09bff", "devlop"), fragments)
+        self.assertIn(("fg:#8a52bc", "u@h"), fragments)
+        self.assertIn(("fg:#6b73ad", str(self.tmp.resolve())), fragments)
+        self.assertIn(("fg:#cc87eb", "$"), fragments)
+        self.assertIn(("fg:#6b73ad", "└─>"), fragments)
+        self.assertIn(("fg:#6b73ad", "╰>"), devlop.continuation_fragments(CHERRY))
+
+    def test_shell_loads_colors(self):
+        shell = self.setup_shell({})
+        self.assertEqual(shell.colors, devlop.load_shell_colors())
 
 
 class TestPrepare(DevlopTestCase):
