@@ -118,6 +118,7 @@ class RecipeRunner:
             workdir=self.workdir,
             stack=(),
             top=True,
+            env=None,
         )
 
     # ----------------------------------------------------------------- 配方
@@ -130,6 +131,7 @@ class RecipeRunner:
         workdir: Path,
         stack: tuple[Path, ...],
         top: bool,
+        env: dict[str, str] | None = None,
     ) -> None:
         path = path.resolve()
         if path in stack:
@@ -142,7 +144,7 @@ class RecipeRunner:
         cwd = self._prepare(recipe, workdir=workdir, top=top)
         data = bind_call_args(recipe, args)
 
-        self._run_works(recipe, data=data, cwd=cwd, stack=stack, top=top)
+        self._run_works(recipe, data=data, cwd=cwd, stack=stack, top=top, env=env)
 
     def _prepare(self, recipe: Recipe, *, workdir: Path, top: bool) -> Path:
         """计算并创建该配方的工作目录。"""
@@ -163,6 +165,7 @@ class RecipeRunner:
         cwd: Path,
         stack: tuple[Path, ...],
         top: bool,
+        env: dict[str, str] | None = None,
     ) -> None:
         """固定顺序: 克隆 -> 下载 -> 解压 -> 下载解压 -> 工作流。"""
         if recipe.material is not None:
@@ -170,7 +173,7 @@ class RecipeRunner:
         self._run_downloads(recipe)
         self._run_unzips(recipe, cwd)
         self._run_unpacks(recipe)
-        self._run_jobs(recipe, data=data, cwd=cwd, stack=stack, top=top)
+        self._run_jobs(recipe, data=data, cwd=cwd, stack=stack, top=top, env=env)
 
     def _clone(self, recipe: Recipe, cwd: Path) -> None:
         assert recipe.material is not None
@@ -203,6 +206,7 @@ class RecipeRunner:
         cwd: Path,
         stack: tuple[Path, ...],
         top: bool,
+        env: dict[str, str] | None = None,
     ) -> None:
         """按声明顺序执行作业；``next`` 可以跳到别的作业，``linkup`` 可以并发联动。"""
         jobs = list(recipe.jobs)
@@ -236,6 +240,7 @@ class RecipeRunner:
                 cwd=cwd,
                 stack=stack,
                 job_names=set(index_of),
+                env=env,
             )
             if target is None:
                 cursor += 1
@@ -259,6 +264,7 @@ class RecipeRunner:
         cwd: Path,
         stack: tuple[Path, ...],
         job_names: set[str],
+        env: dict[str, str] | None = None,
     ) -> str | None:
         """执行一个作业；有 linkup 时和联动的作业并发执行。
 
@@ -276,6 +282,7 @@ class RecipeRunner:
                     cwd=cwd,
                     stack=stack,
                     job_names=job_names,
+                    env=env,
                 )
             except JobStop as exc:
                 return self._handle_job_failure(job, exc, recipe=recipe)
@@ -297,6 +304,7 @@ class RecipeRunner:
                         cwd=cwd,
                         stack=stack,
                         job_names=job_names,
+                        env=env,
                     ): member
                     for member in members
                 }
@@ -346,6 +354,7 @@ class RecipeRunner:
         cwd: Path,
         stack: tuple[Path, ...],
         job_names: set[str],
+        env: dict[str, str] | None = None,
     ) -> str | None:
         """执行一个作业，返回要跳转到的作业名（None 表示继续下一个作业）。"""
         if not job.matches(self.system):
@@ -385,6 +394,7 @@ class RecipeRunner:
                     data=data,
                     cwd=cwd,
                     stack=stack,
+                    env=env,
                 )
             except InteractiveInputError:
                 raise
@@ -484,10 +494,13 @@ class RecipeRunner:
         data: list[Any],
         cwd: Path,
         stack: tuple[Path, ...],
+        env: dict[str, str] | None = None,
     ) -> None:
         """执行一个步骤；有 linkup 时和联动的步骤并发执行。"""
         if not linked:
-            self._run_step_own(step, recipe=recipe, job=job, data=data, cwd=cwd, stack=stack)
+            self._run_step_own(
+                step, recipe=recipe, job=job, data=data, cwd=cwd, stack=stack, env=env
+            )
             return
 
         members = [step, *linked]
@@ -506,6 +519,7 @@ class RecipeRunner:
                         data=data,
                         cwd=cwd,
                         stack=stack,
+                        env=env,
                     ): member
                     for member in members
                 }
@@ -538,19 +552,20 @@ class RecipeRunner:
         data: list[Any],
         cwd: Path,
         stack: tuple[Path, ...],
+        env: dict[str, str] | None = None,
     ) -> None:
         logger.info("  * 步骤: {}", step.name)
 
-        env = resolve_step_env(recipe, job, step, self.system)
-        if env:
-            logger.info("    环境: {}", "; ".join(f"{k}={v}" for k, v in env.items()))
+        step_env = resolve_step_env(recipe, job, step, self.system, inherited=env)
+        if step_env:
+            logger.info("    环境: {}", "; ".join(f"{k}={v}" for k, v in step_env.items()))
 
         for command in step.run:
             parts = [self._subst(token, data, recipe, step) for token in command]
             if not parts or not str(parts[0]):
                 raise RecipeError(f"{recipe.path.name} 步骤 {step.name}: 指令不能为空")
             line = " ".join(str(part) for part in parts)
-            self._exec_shell(line, cwd=cwd, recipe=recipe, step=step, env=env)
+            self._exec_shell(line, cwd=cwd, recipe=recipe, step=step, env=step_env)
 
         for rel_path, args in step.call:
             target = (recipe.dir / rel_path).resolve()
@@ -573,6 +588,7 @@ class RecipeRunner:
                 workdir=cwd,
                 stack=stack + (recipe.path,),
                 top=False,
+                env=step_env,
             )
 
     # ----------------------------------------------------------------- 工具

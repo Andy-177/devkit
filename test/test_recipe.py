@@ -592,13 +592,14 @@ class TestResolveStepEnv(unittest.TestCase):
         })
         self.assertEqual(env, {"ONLY": "x"})
 
-    def test_job_area_ignores_step_env_without_area(self):
+    def test_lower_step_env_modifies_inherited_job_area(self):
         env = self._one({
             "env": [{"key": "A", "value": "1"}],
             "jobs": {"j": {"area": [{"key": "ONLY", "value": "x"}],
-                           "steps": {"s": {"env": [{"key": "A", "value": "9"}]}}}},
+                           "steps": {"s": {"env": [{"key": "ONLY", "value": "y"},
+                                                   {"key": "NEW", "value": "z"}]}}}},
         })
-        self.assertEqual(env, {"ONLY": "x"})
+        self.assertEqual(env, {"ONLY": "y", "NEW": "z"})
 
     def test_step_area_ignores_job_area(self):
         env = self._one({
@@ -637,6 +638,39 @@ class TestResolveStepEnv(unittest.TestCase):
             "jobs": {"j": {"area": [], "steps": {"s": {}}}},
         })
         self.assertEqual(env, {})
+
+    def test_global_area_ignores_inherited(self):
+        raw = {
+            "area": [{"key": "ONLY", "value": "x"}],
+            "jobs": {"j": {"steps": {"s": {}}}},
+        }
+        recipe = self._recipe(raw)
+        job, step = recipe.jobs[0], recipe.jobs[0].steps[0]
+        env = resolve_step_env(recipe, job, step, "win_amd64", inherited={"FROM": "parent"})
+        self.assertEqual(env, {"ONLY": "x"})
+
+    def test_empty_global_area_still_resets_inherited(self):
+        raw = {"area": [], "jobs": {"j": {"steps": {"s": {}}}}}
+        recipe = self._recipe(raw)
+        job, step = recipe.jobs[0], recipe.jobs[0].steps[0]
+        env = resolve_step_env(recipe, job, step, "win_amd64", inherited={"FROM": "parent"})
+        self.assertEqual(env, {})
+
+    def test_inherited_env_merges_with_recipe_env(self):
+        raw = {"env": [{"key": "B", "value": "2"}], "jobs": {"j": {"steps": {"s": {}}}}}
+        recipe = self._recipe(raw)
+        job, step = recipe.jobs[0], recipe.jobs[0].steps[0]
+        env = resolve_step_env(recipe, job, step, "win_amd64",
+                               inherited={"A": "1", "B": "old"})
+        self.assertEqual(env, {"A": "1", "B": "2"})
+
+    def test_lower_env_modifies_inherited_area(self):
+        raw = {"jobs": {"j": {"steps": {"s": {}}}}}
+        recipe = self._recipe(raw)
+        job, step = recipe.jobs[0], recipe.jobs[0].steps[0]
+        env = resolve_step_env(recipe, job, step, "win_amd64",
+                               inherited={"AREA_KEY": "from-area"})
+        self.assertEqual(env, {"AREA_KEY": "from-area"})
 
 
 if __name__ == "__main__":

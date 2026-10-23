@@ -155,22 +155,22 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
     ]
 
 每项 ``key`` 必填且非空，``value`` 必填（字符串，可为空串），``system`` 可选（字符串
-或字符串列表，缺省对所有系统生效，只有当前系统匹配的项才参与合并）。合并规则：
+或字符串列表，缺省对所有系统生效，只有当前系统匹配的项才参与合并）。
 
-* 从全局 env 起底；作业的 env 覆盖合并到全局 env 上（同 key 覆盖，异 key 合并）；
-  步骤的 env 再覆盖合并到作业层的结果上；
-* 同样的 key，低层覆盖高层；同一个块内重复的 key，后出现的覆盖先出现的；
-* 合并后的环境变量只增量叠加在进程自身环境之上，最后交给每个 ``run`` 的子进程。
+``area`` 是 ``env`` 的变种，格式相同，三处都能写（顶层与 ``download`` 平级）。
+两者每一级的逻辑完全一样，只是层数不同：
 
-``area`` 是 ``env`` 的变种，优先级更高，**只能在作业和步骤里用**。它是一条
-"强制隔离线"，会完全忽略上层已经算好的 env 和 area：
+* 从上层继承的环境起底（顶层配方为空；被 ``call`` 调用的子配方默认继承调用方步骤
+  的环境）；
+* 依次叠加配方级、作业级、步骤级；每一级都一样：若该级写了 ``area``，就强制覆盖
+  继承下来的结果以及同级的 ``env``，只保留自身 area（空 area 也是一条覆盖线，会把
+  环境清空）；否则把同级 ``env`` 覆盖合并到当前结果上（同 key 覆盖、异 key 合并）；
+* 因此上层若用了 ``area``，从它继承下来的 area 仍可被下层的 ``env`` 修改；
+* 同一个块内重复的 key，后出现的覆盖先出现的；
+* 合并结果只增量叠加在进程自身环境之上，最后交给每个 ``run`` 的子进程。
 
-* 作业里写 ``area``：该作业完全忽略全局 env，作业内所有步骤默认加载作业的 area；
-* 步骤里写 ``area``：该步骤的 ``run`` 完全忽略作业层的（env 或 area）结果，
-  只用自身 area；
-* 一个块里 ``area`` 和 ``env`` 同时存在时，只有 ``area`` 生效，``env`` 被丢弃；
-* 一旦作业用了 ``area``，它下面没写 ``area`` 的步骤，其 ``env`` 也不再生效
-  （除非该步骤自己带了 ``area``）。
+顶层 ``area`` 的用处是让子配方**不接受**从调用方继承来的环境：子配方一旦在顶层写了
+``area``，就只用自己的 area。
 
 data 里出现整数时，含义取决于配方如何被使用：
 
@@ -215,7 +215,7 @@ DEFAULT_STEP_ERRSKIP = STEP_ERR_STOP
 #: 作业 errskip 缺省: 终止出错的作业，联动的作业跑完再继续下一个作业
 DEFAULT_JOB_ERRSKIP = JOB_ERR_PROCEED
 
-_KNOWN_TOP_KEYS = {"material", "download", "unzip", "unpack", "env", "data", "jobs"}
+_KNOWN_TOP_KEYS = {"material", "download", "unzip", "unpack", "env", "area", "data", "jobs"}
 _KNOWN_MATERIAL_KEYS = {"repo", "branch", "depth", "commit"}
 _KNOWN_JOB_KEYS = {"system", "env", "area", "steps", "skip", "linkup", "errskip"}
 _KNOWN_STEP_KEYS = {
@@ -362,6 +362,7 @@ class Recipe:
     unzips: tuple[UnzipSpec, ...] = ()
     unpacks: tuple[UnpackSpec, ...] = ()
     env: tuple[EnvEntry, ...] = ()
+    area: tuple[EnvEntry, ...] | None = None
     data: tuple[Any, ...] = ()
     jobs: tuple[Job, ...] = field(default_factory=tuple)
 
@@ -775,6 +776,7 @@ def _parse_recipe(path: Path, raw: dict) -> Recipe:
         unzips=_parse_unzip(raw.get("unzip"), "unzip"),
         unpacks=_parse_unpack(raw.get("unpack"), "unpack"),
         env=_parse_env_block(raw.get("env"), "env") or (),
+        area=_parse_env_block(raw.get("area"), "area"),
         data=tuple(raw.get("data") or ()),
         jobs=_parse_jobs(raw.get("jobs"), "jobs"),
     )
@@ -788,33 +790,47 @@ def _merge_env(base: dict[str, str], entries: tuple[EnvEntry, ...], system: str)
     return base
 
 
-def resolve_step_env(recipe: Recipe, job: Job, step: Step, system: str) -> dict[str, str]:
+def _apply_env_level(
+    base: dict[str, str],
+    env: tuple[EnvEntry, ...],
+    area: tuple[EnvEntry, ...] | None,
+    system: str,
+) -> dict[str, str]:
+    """在 ``base``（从上层继承的环境）之上叠加一层的 env/area。
+
+    每一层的逻辑都一样，只是层数不同：
+
+    * 该层写了 ``area``：强制覆盖继承下来的 ``base`` 以及同层的 ``env``，只保留
+      自身 area（空 area 也是一条覆盖线，会把环境清空）；
+    * 该层没写 ``area``：把该层 ``env`` 覆盖合并进 ``base``（同 key 覆盖、异 key 合并）。
+    """
+    if area is not None:
+        return _merge_env({}, area, system)
+    return _merge_env(base, env, system)
+
+
+def resolve_step_env(
+    recipe: Recipe,
+    job: Job,
+    step: Step,
+    system: str,
+    inherited: dict[str, str] | None = None,
+) -> dict[str, str]:
     """计算一个步骤最终生效的环境变量。
 
-    合并顺序与规则::
+    从上层继承的环境起底（顶层配方为空；被 ``call`` 调用的子配方默认继承调用方
+    步骤的环境），再依次叠加配方级、作业级、步骤级。每一级的逻辑完全相同::
 
-    * 从全局 env 起底；
-    * job 若声明了 ``area``，则完全忽略全局 env，改用 job 的 area；否则把 job 的
-      ``env`` 覆盖合并到当前结果上；
-    * step 若声明了 ``area``，则完全忽略 job 层的结果，改用 step 的 area；否则，
-      只有在 job 没有 ``area`` 时才把 step 的 ``env`` 覆盖合并上去（job 一旦用了
-      area，其下所有 step 的 ``env`` 都不再生效）；
-    * 同一个块内重复的 key，后出现的覆盖先出现的。
+    * 该级写了 ``area``：强制覆盖继承下来的结果以及同级的 ``env``，只保留自身 area；
+    * 该级没写 ``area``：把同级 ``env`` 覆盖合并到当前结果上（同 key 覆盖、异 key 合并）。
 
-    返回 ``key -> value`` 的字典，供 ``subprocess`` 使用。
+    因此上层如果用了 ``area``，从它继承下来的 area 仍可被下层的 ``env`` 修改。
+    同一个块内重复的 key，后出现的覆盖先出现的。返回 ``key -> value`` 字典。
     """
-    result: dict[str, str] = {}
-    if job.area is not None:
-        _merge_env(result, job.area, system)
-    else:
-        _merge_env(result, recipe.env, system)
-        _merge_env(result, job.env, system)
-
-    if step.area is not None:
-        result = {}
-        _merge_env(result, step.area, system)
-    elif job.area is None:
-        _merge_env(result, step.env, system)
+    result = dict(inherited) if inherited else {}
+    result = _apply_env_level(result, recipe.env, recipe.area, system)
+    result = _apply_env_level(result, job.env, job.area, system)
+    result = _apply_env_level(result, step.env, step.area, system)
     return result
 
 

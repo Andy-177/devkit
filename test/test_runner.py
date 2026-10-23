@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import _common
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -613,14 +614,71 @@ class TestEnvExecution(RunnerTestCase):
         self.assertEqual(_common.read(self.workdir / "y.txt"), "area")
 
     def test_existing_process_env_kept(self):
+        sentinel = "DK_PARENT_SENTINEL"
         raw = {
             "env": [{"key": "DK_NEW", "value": "v"}],
             "jobs": {"main": {"steps": {"s": {
-                "run": [self._dump_env("out.txt", "PATH")]}}}},
+                "run": [self._dump_env("out.txt", sentinel)]}}}},
+        }
+        with mock.patch.dict(os.environ, {sentinel: "kept"}, clear=False):
+            run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        self.assertEqual(_common.read(self.workdir / "out.txt"), "kept")
+
+    def test_child_recipe_inherits_parent_step_env(self):
+        write_recipe(
+            self.tmp,
+            {"jobs": {"main": {"steps": {"child": {
+                "run": [self._dump_env("child.txt", "DK_FROM_PARENT")]}}}}},
+            name="child.json",
+        )
+        raw = {
+            "env": [{"key": "DK_FROM_PARENT", "value": "inherited"}],
+            "jobs": {"main": {"steps": {"parent": {
+                "call": {"child.json": []}}}}},
         }
         run_recipe(write_recipe(self.tmp, raw), self.workdir)
-        dumped = _common.read(self.workdir / "out.txt")
-        self.assertTrue(dumped)  # 配方 env 是增量，不应清掉进程已有的 PATH
+        self.assertEqual(_common.read(self.workdir / "child.txt"), "inherited")
+
+    def test_child_global_area_rejects_inherited_env(self):
+        write_recipe(
+            self.tmp,
+            {"area": [{"key": "DK_CHILD", "value": "own"}],
+             "jobs": {"main": {"steps": {"child": {"run": [
+                 self._dump_env("inherited.txt", "DK_FROM_PARENT"),
+                 self._dump_env("own.txt", "DK_CHILD"),
+             ]}}}}},
+            name="child.json",
+        )
+        raw = {
+            "env": [{"key": "DK_FROM_PARENT", "value": "inherited"}],
+            "jobs": {"main": {"steps": {"parent": {
+                "call": {"child.json": []}}}}},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        self.assertEqual(_common.read(self.workdir / "inherited.txt"), "")
+        self.assertEqual(_common.read(self.workdir / "own.txt"), "own")
+
+    def test_step_area_ignores_job_area_in_subprocess(self):
+        raw = {
+            "jobs": {"main": {
+                "area": [{"key": "DK_LAYER", "value": "job"}],
+                "steps": {"s": {
+                    "run": [self._dump_env("out.txt", "DK_LAYER")],
+                    "area": [{"key": "DK_LAYER", "value": "step"}],
+                }},
+            }},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        self.assertEqual(_common.read(self.workdir / "out.txt"), "step")
+
+    def test_system_filtered_env_missing_in_subprocess(self):
+        raw = {
+            "env": [{"key": "DK_OTHER", "value": "v", "system": "never-matches"}],
+            "jobs": {"main": {"steps": {"s": {
+                "run": [self._dump_env("out.txt", "DK_OTHER")]}}}},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        self.assertEqual(_common.read(self.workdir / "out.txt"), "")
 
 
 if __name__ == "__main__":
