@@ -40,6 +40,31 @@ class RunnerTestCase(unittest.TestCase):
         path = write_recipe(self.tmp, raw)
         return run_recipe(path, self.workdir, **kwargs)
 
+    def dump_env(self, name: str, var: str) -> list[str]:
+        """一条命令: 把单个环境变量写进 name 文件。"""
+        code = f"import os;open('{name}','w').write(os.environ.get('{var}',''))"
+        return py_command(code)
+
+    def dump_vars(self, name: str, variables: list[str], *, sleep: int = 0) -> list[str]:
+        """一条命令: 把一组环境变量以 ``KEY=VALUE`` 写进 name，可选先睡 sleep 秒。"""
+        keys = ",".join(f"'{v}'" for v in variables)
+        sleep_stmt = f"time.sleep({sleep});" if sleep else ""
+        mods = "os,time" if sleep else "os"
+        code = (
+            f"import {mods};{sleep_stmt}open('{name}','w').write("
+            f"'\\n'.join(k+'='+os.environ.get(k,'') for k in [{keys}]))"
+        )
+        return py_command(code)
+
+    def read_vars(self, name: str) -> dict[str, str]:
+        """读回 ``KEY=VALUE`` 文件为字典。"""
+        result: dict[str, str] = {}
+        for line in _common.read(self.workdir / name).splitlines():
+            if "=" in line:
+                key, _, value = line.partition("=")
+                result[key] = value
+        return result
+
 
 class TestBasicExecution(RunnerTestCase):
     def test_shell_commands_run_in_declared_order(self):
@@ -679,6 +704,185 @@ class TestEnvExecution(RunnerTestCase):
         }
         run_recipe(write_recipe(self.tmp, raw), self.workdir)
         self.assertEqual(_common.read(self.workdir / "out.txt"), "")
+
+
+class TestComplexEnv(RunnerTestCase):
+    """复杂分层环境: 全局/作业/步骤 env 与 area 混用，含 system 过滤。"""
+
+    VARIABLES = ["DK_GLOBAL", "DK_JOB", "DK_STEP", "DK_AREA", "DK_KEEP", "DK_OVERRIDE"]
+
+    def test_triple_layer_merge_and_override(self):
+        raw = {
+            "env": [
+                {"key": "DK_GLOBAL", "value": "g"},
+                {"key": "DK_OVERRIDE", "value": "from-global"},
+                {"key": "DK_KEEP", "value": "global-only"},
+            ],
+            "jobs": {"main": {
+                "env": [
+                    {"key": "DK_JOB", "value": "j"},
+                    {"key": "DK_OVERRIDE", "value": "from-job"},
+                ],
+                "steps": {"s": {
+                    "env": [
+                        {"key": "DK_STEP", "value": "s"},
+                        {"key": "DK_OVERRIDE", "value": "from-step"},
+                    ],
+                    "run": [self.dump_vars("out.txt", self.VARIABLES)],
+                }},
+            }},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        env = self.read_vars("out.txt")
+        self.assertEqual(env["DK_GLOBAL"], "g")
+        self.assertEqual(env["DK_JOB"], "j")
+        self.assertEqual(env["DK_STEP"], "s")
+        self.assertEqual(env["DK_KEEP"], "global-only")
+        self.assertEqual(env["DK_OVERRIDE"], "from-step")
+        self.assertEqual(env["DK_AREA"], "")
+
+    def test_job_area_drops_global_but_step_env_modifies_it(self):
+        raw = {
+            "env": [{"key": "DK_GLOBAL", "value": "g"}],
+            "jobs": {"main": {
+                "area": [{"key": "DK_AREA", "value": "job-area"}],
+                "steps": {"s": {
+                    "env": [{"key": "DK_AREA", "value": "step-patch"},
+                            {"key": "DK_STEP", "value": "s"}],
+                    "run": [self.dump_vars("out.txt", self.VARIABLES)],
+                }},
+            }},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        env = self.read_vars("out.txt")
+        self.assertEqual(env["DK_GLOBAL"], "")           # 作业 area 抹掉全局 env
+        self.assertEqual(env["DK_AREA"], "step-patch")   # 下层 env 修改继承下来的 area
+        self.assertEqual(env["DK_STEP"], "s")
+
+    def test_step_area_resets_all_upper_layers(self):
+        raw = {
+            "env": [{"key": "DK_GLOBAL", "value": "g"}, {"key": "DK_KEEP", "value": "k"}],
+            "jobs": {"main": {
+                "env": [{"key": "DK_JOB", "value": "j"}],
+                "steps": {"s": {
+                    "area": [{"key": "DK_AREA", "value": "step-area"}],
+                    "run": [self.dump_vars("out.txt", self.VARIABLES)],
+                }},
+            }},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        env = self.read_vars("out.txt")
+        self.assertEqual(env["DK_AREA"], "step-area")
+        for key in ("DK_GLOBAL", "DK_JOB", "DK_KEEP", "DK_STEP", "DK_OVERRIDE"):
+            self.assertEqual(env[key], "", f"{key} 应被 step.area 抹掉")
+
+    def test_system_filtered_layers(self):
+        raw = {
+            "env": [
+                {"key": "DK_GLOBAL", "value": "g"},
+                {"key": "DK_KEEP", "value": "other", "system": "linux_amd64"},
+            ],
+            "jobs": {"main": {
+                "env": [{"key": "DK_JOB", "value": "j", "system": TEST_SYSTEM}],
+                "steps": {"s": {
+                    "run": [self.dump_vars("out.txt", self.VARIABLES)],
+                }},
+            }},
+        }
+        run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        env = self.read_vars("out.txt")
+        self.assertEqual(env["DK_GLOBAL"], "g")
+        self.assertEqual(env["DK_JOB"], "j")
+        self.assertEqual(env["DK_KEEP"], "")  # 只匹配 linux，不应出现
+
+
+class TestEnvUnderLinkup(RunnerTestCase):
+    """联动（并发）下各成员的环境互不串扰。"""
+
+    def test_linked_steps_keep_isolated_env(self):
+        # 发起者先睡后 dump，被联动者与它并发；两者读到的分层环境应各归各。
+        raw = {
+            "env": [{"key": "DK_SHARED", "value": "global"},
+                    {"key": "DK_GLOBAL_ONLY", "value": "g"}],
+            "jobs": {"main": {"steps": {
+                "initiator": {
+                    "linkup": ["linked"],
+                    "run": [self.dump_vars("init.txt", ["DK_SHARED", "DK_GLOBAL_ONLY", "DK_ONLY"], sleep=1)],
+                    "env": [{"key": "DK_SHARED", "value": "initiator"},
+                            {"key": "DK_ONLY", "value": "initiator-only"}],
+                },
+                "linked": {
+                    "skip": True,
+                    "run": [self.dump_vars("linked.txt", ["DK_SHARED", "DK_GLOBAL_ONLY", "DK_ONLY"], sleep=1)],
+                    "env": [{"key": "DK_SHARED", "value": "linked"}],
+                },
+            }}},
+        }
+        runner = run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        self.assertFalse(runner.failed)
+        init = self.read_vars(self.workdir / "init.txt")
+        link = self.read_vars(self.workdir / "linked.txt")
+        self.assertEqual(init["DK_SHARED"], "initiator")
+        self.assertEqual(init["DK_GLOBAL_ONLY"], "g")
+        self.assertEqual(init["DK_ONLY"], "initiator-only")
+        self.assertEqual(link["DK_SHARED"], "linked")   # 不被发起者覆盖
+        self.assertEqual(link["DK_GLOBAL_ONLY"], "g")
+        self.assertEqual(link["DK_ONLY"], "")           # 拿不到发起者的私有 env
+
+    def test_linked_jobs_keep_isolated_env(self):
+        raw = {
+            "env": [{"key": "DK_SHARED", "value": "global"}],
+            "jobs": {
+                "a": {
+                    "linkup": "b",
+                    "env": [{"key": "DK_SHARED", "value": "job-a"},
+                            {"key": "DK_ONLY", "value": "a-only"}],
+                    "steps": {"s": {"run": [
+                        self.dump_vars("a.txt", ["DK_SHARED", "DK_ONLY"], sleep=1)]}},
+                },
+                "b": {
+                    "skip": True,
+                    "env": [{"key": "DK_SHARED", "value": "job-b"}],
+                    "steps": {"s": {"run": [
+                        self.dump_vars("b.txt", ["DK_SHARED", "DK_ONLY"], sleep=1)]}},
+                },
+            },
+        }
+        runner = run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        self.assertFalse(runner.failed)
+        a = self.read_vars(self.workdir / "a.txt")
+        b = self.read_vars(self.workdir / "b.txt")
+        self.assertEqual(a["DK_SHARED"], "job-a")
+        self.assertEqual(a["DK_ONLY"], "a-only")
+        self.assertEqual(b["DK_SHARED"], "job-b")
+        self.assertEqual(b["DK_ONLY"], "")
+
+    def test_linked_step_inherits_env_into_called_child_recipe(self):
+        write_recipe(
+            self.tmp,
+            {"jobs": {"main": {"steps": {"child": {
+                "run": [self.dump_vars("child.txt", ["DK_PARENT"])]}}}}},
+            name="child.json",
+        )
+        raw = {
+            "env": [{"key": "DK_PARENT", "value": "from-global"}],
+            "jobs": {"main": {"steps": {
+                "initiator": {
+                    "linkup": ["other"],
+                    "env": [{"key": "DK_PARENT", "value": "from-initiator"}],
+                    "run": [echo_write("i.txt")],
+                    "call": {"child.json": []},
+                },
+                "other": {
+                    "skip": True,
+                    "run": [slow_write("other.txt", 1)],
+                },
+            }}},
+        }
+        runner = run_recipe(write_recipe(self.tmp, raw), self.workdir)
+        self.assertFalse(runner.failed)
+        child = self.read_vars(self.workdir / "child.txt")
+        self.assertEqual(child["DK_PARENT"], "from-initiator")
 
 
 if __name__ == "__main__":
