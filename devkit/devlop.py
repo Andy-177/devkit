@@ -214,7 +214,6 @@ class DevlopShell:
             return FormattedText(continuation_fragments(self.colors))
 
         session = PromptSession(key_bindings=bindings, input=input, output=output)
-        print("devlop 终端：Enter 执行，Ctrl-J 换行，Ctrl-D 退出", file=sys.stderr)
 
         while True:
             try:

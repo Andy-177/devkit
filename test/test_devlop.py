@@ -266,9 +266,9 @@ class TestCli(DevlopTestCase):
             code = main(argv)
         return code, out.getvalue(), err.getvalue()
 
-    def test_parser_builds_devlop_subcommand(self):
-        args = build_parser().parse_args(["devlop", "x.json", "--dry-run"])
-        self.assertEqual(args.command, "devlop")
+    def test_parser_builds_shell_alias(self):
+        args = build_parser().parse_args(["shell", "x.json", "--dry-run"])
+        self.assertEqual(args.command, "shell")
         self.assertEqual(args.recipe, "x.json")
         self.assertTrue(args.dry_run)
         self.assertFalse(hasattr(args, "job"))
@@ -279,6 +279,7 @@ class TestCli(DevlopTestCase):
             with contextlib.redirect_stdout(out):
                 main(["--help"])
         self.assertIn("devlop", out.getvalue())
+        self.assertIn("shell", out.getvalue())
 
     def test_cli_dispatches_to_devlop(self):
         with mock.patch("devkit.devlop.run_devlop", return_value=0) as run:
@@ -290,9 +291,44 @@ class TestCli(DevlopTestCase):
         run.assert_called_once()
         self.assertEqual(run.call_args.args[1], "x.json")
 
+    def test_cli_dispatches_to_shell(self):
+        with mock.patch("devkit.devlop.run_devlop", return_value=0) as run:
+            code, _, _ = self.run_cli([
+                "shell", "x.json", "-w", str(self.workdir),
+                "-d", str(self.workdir / "dl"),
+            ])
+        self.assertEqual(code, 0)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[1], "x.json")
+
+    def test_shell_hides_info_logs(self):
+        path = write_recipe(self.tmp, {})
+        argv = ["-w", str(self.workdir), "-d", str(self.workdir / "dl")]
+        with mock.patch("devkit.devlop.DevlopShell.run"):
+            code, _, err = self.run_cli(["shell", str(path), *argv])
+        self.assertEqual(code, 0)
+        self.assertNotIn("配方", err)
+        self.assertNotIn("INFO", err)
+
+    def test_devlop_shows_info_logs(self):
+        path = write_recipe(self.tmp, {})
+        argv = ["-w", str(self.workdir), "-d", str(self.workdir / "dl")]
+        with mock.patch("devkit.devlop.DevlopShell.run"):
+            code, _, err = self.run_cli(["devlop", str(path), *argv])
+        self.assertEqual(code, 0)
+        self.assertIn("配方", err)
+
     def test_missing_recipe_returns_1_without_entering_terminal(self):
         code, _, err = self.run_cli([
             "devlop", str(self.tmp / "absent.json"),
+            "-w", str(self.workdir), "-d", str(self.workdir / "dl"),
+        ])
+        self.assertEqual(code, 1)
+        self.assertIn("不存在", err)
+
+    def test_shell_missing_recipe_still_reports_error(self):
+        code, _, err = self.run_cli([
+            "shell", str(self.tmp / "absent.json"),
             "-w", str(self.workdir), "-d", str(self.workdir / "dl"),
         ])
         self.assertEqual(code, 1)

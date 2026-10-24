@@ -22,6 +22,7 @@
 devkit build recipe.json                # 执行配方
 devkit run recipe.json                  # build 的别名，完全等价
 devkit devlop recipe.json               # 执行非 jobs 部分后进入交互终端
+devkit shell recipe.json                # devlop 的别名，但不显示日志
 devkit build bon/recipe.json -w build   # 指定工作区
 devkit build recipe.json -j build-windows --dry-run
 devkit recipe.json                      # 省略 build 也行
@@ -197,12 +198,15 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 `get_system_info()`，并注入 `devkit` 包及各子模块（`recipe`/`runner`/`expr` 等），
 方便手工验证表达式。
 
-### devlop 交互终端
+### devlop / shell 交互终端
 
 `devkit devlop recipe.json` 先执行配方的非 `jobs` 部分（`material`/`download`/
 `unzip`/`unpack`），然后进入交互终端。终端默认工作目录是 `--workdir`；命令通过与
 `run` 相同的执行路径运行，因此继承配方级 `env`/`area`，但不会继承作业级、步骤级
 环境。`cd`/`chdir`、`exit`/`quit`/`logout` 是终端内建命令。
+
+`devkit shell recipe.json` 是 devlop 的别名，行为完全一致，只是隐藏 INFO/DEBUG
+日志，界面更简洁；错误仍会显示。
 
 ```text
 devlop 用户名@PC名 完整所在路径 $

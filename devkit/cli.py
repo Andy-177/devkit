@@ -5,6 +5,7 @@
     devkit build recipe.json               # 执行配方
     devkit run recipe.json                 # build 的别名，等价
     devkit devlop recipe.json              # 执行非 jobs 部分后进入交互终端
+    devkit shell recipe.json               # devlop 的别名，但不显示日志
     devkit build bon/recipe.json -w build  # 指定工作目录
     devkit build recipe.json -j build-windows --dry-run
     devkit system                        # 打印当前系统标识
@@ -74,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_recipe_arguments(devlop, with_job=False)
 
+    shell = subparsers.add_parser(
+        "shell", help="devlop 的别名：执行非 jobs 部分后进入终端，但不显示日志"
+    )
+    _add_recipe_arguments(shell, with_job=False)
+
     system = subparsers.add_parser("system", help="打印当前检测到的系统标识")
     system.add_argument("-v", "--verbose", action="store_true", help="输出调试日志")
 
@@ -110,11 +116,11 @@ def _add_recipe_arguments(parser: argparse.ArgumentParser, *, with_job: bool) ->
     parser.add_argument("-v", "--verbose", action="store_true", help="输出调试日志")
 
 
-def _setup_logging(verbose: bool) -> None:
+def _setup_logging(verbose: bool, *, quiet: bool = False) -> None:
     logger.remove()
     logger.add(
         sys.stderr,
-        level="DEBUG" if verbose else "INFO",
+        level="ERROR" if quiet else ("DEBUG" if verbose else "INFO"),
         format="<green>{time:HH:mm:ss}</green> | <level>{level:<8}</level> | <level>{message}</level>",
         colorize=True,
         backtrace=False,
@@ -126,7 +132,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
     # 允许省略 build 子命令: devkit recipe.json
-    known = {"build", "run", "devlop", "system", "-h", "--help", "--version", "console"}
+    known = {
+        "build",
+        "run",
+        "devlop",
+        "shell",
+        "system",
+        "-h",
+        "--help",
+        "--version",
+        "console",
+    }
     if argv and argv[0] not in known and not argv[0].startswith("-"):
         argv.insert(0, "build")
 
@@ -137,7 +153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    _setup_logging(getattr(args, "verbose", False))
+    _setup_logging(getattr(args, "verbose", False), quiet=args.command == "shell")
 
     if args.command == "system":
         logger.info("当前系统: {}", detect_system())
@@ -175,7 +191,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         code.interact(banner=banner, local=ns)
         return 0
 
-    if args.command == "devlop":
+    if args.command in {"devlop", "shell"}:
         from devkit.devlop import run_devlop
 
         try:
