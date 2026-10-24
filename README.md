@@ -27,7 +27,7 @@ devkit build bon/recipe.json -w build   # 指定工作区
 devkit build recipe.json -j build-windows --dry-run
 devkit recipe.json                      # 省略 build 也行
 devkit system                           # 打印当前系统标识（如 win_amd64）
-devkit console                          # 进入 devkit 表达式 REPL
+devkit console recipe.json             # 从配方视角启动表达式 REPL
 devkit --version
 ```
 
@@ -196,7 +196,7 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 
 `devkit console` 会启动一个 Python REPL，内置完整的 builtins、`get_recipe_path()`、
 `get_system_info()`，并注入 `devkit` 包及各子模块（`recipe`/`runner`/`expr` 等），
-方便手工验证表达式。
+方便从配方视角手工验证表达式。
 
 ### devlop / shell 交互终端
 

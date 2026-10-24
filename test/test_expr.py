@@ -1167,8 +1167,9 @@ class TestConsole(unittest.TestCase):
         from devkit import cli
         from devkit.system import detect_system
 
-        with mock.patch("code.interact") as interact:
-            code = cli.main(["console"])
+        with tempfile.TemporaryDirectory() as td, mock.patch("code.interact") as interact:
+            path = _common.write_recipe(Path(td), {})
+            code = cli.main(["console", str(path)])
         self.assertEqual(code, 0)
         namespace = interact.call_args.kwargs["local"]
         self.assertIn("get_recipe_path", namespace)
@@ -1180,3 +1181,4 @@ class TestConsole(unittest.TestCase):
         self.assertIn("expr", namespace)
         self.assertEqual(namespace["get_system_info"](), detect_system())
         self.assertEqual(namespace["__builtins__"].sum([1, 2, 3]), 6)
+        self.assertIsNotNone(namespace["get_recipe_path"]())
