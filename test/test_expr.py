@@ -135,6 +135,25 @@ class TestNamespace(unittest.TestCase):
         self.assertEqual(substitute_expression("?!{{get_system_info()}}", a), "sys-a")
         self.assertEqual(substitute_expression("?!{{get_system_info()}}", b), "sys-b")
 
+    def test_get_recipe_name(self):
+        path = Path("/tmp/project/recipe.json")
+        self.assertEqual(substitute_expression("?!{{get_recipe_name()}}", _ns(path)), "recipe.json")
+
+    def test_get_recipe_name_without_context_raises(self):
+        with self.assertRaises(ExpressionError):
+            substitute_expression("?!{{get_recipe_name()}}", get_builtin_namespace(None, None))
+
+    def test_get_workdir_path_and_name(self):
+        ns = get_builtin_namespace(Path("r.json"), "win_amd64", Path("/tmp/build/.devkit"))
+        self.assertEqual(substitute_expression("?!{{get_workdir_path()}}", ns), str(Path("/tmp/build/.devkit").resolve()))
+        self.assertEqual(substitute_expression("?!{{get_workdir_name()}}", ns), ".devkit")
+
+    def test_get_workdir_without_context_raises(self):
+        with self.assertRaises(ExpressionError):
+            substitute_expression("?!{{get_workdir_path()}}", get_builtin_namespace(Path("r.json"), None))
+        with self.assertRaises(ExpressionError):
+            substitute_expression("?!{{get_workdir_name()}}", get_builtin_namespace(Path("r.json"), None))
+
     def test_namespaces_are_thread_safe(self):
         def work(index: int) -> str:
             ns = get_builtin_namespace(Path(f"r{index}.json"), f"sys-{index}")
@@ -1174,6 +1193,8 @@ class TestConsole(unittest.TestCase):
         namespace = interact.call_args.kwargs["local"]
         self.assertIn("get_recipe_path", namespace)
         self.assertIn("get_recipe_name", namespace)
+        self.assertIn("get_workdir_path", namespace)
+        self.assertIn("get_workdir_name", namespace)
         self.assertIn("get_system_info", namespace)
         self.assertIn("__builtins__", namespace)
         self.assertIn("devkit", namespace)
@@ -1184,3 +1205,5 @@ class TestConsole(unittest.TestCase):
         self.assertEqual(namespace["__builtins__"].sum([1, 2, 3]), 6)
         self.assertTrue(Path(namespace["get_recipe_path"]()).is_absolute())
         self.assertEqual(namespace["get_recipe_name"](), "recipe.json")
+        self.assertTrue(Path(namespace["get_workdir_path"]()).is_absolute())
+        self.assertIsInstance(namespace["get_workdir_name"](), str)
