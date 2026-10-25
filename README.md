@@ -195,7 +195,7 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 自己的 area。
 
 `devkit console` 会启动一个 Python REPL，内置完整的 builtins、`get_recipe_path()`、
-`get_system_info()`，并注入 `devkit` 包及各子模块（`recipe`/`runner`/`expr` 等），
+`get_recipe_name()`、`get_system_info()`，并注入 `devkit` 包及各子模块（`recipe`/`runner`/`expr` 等），
 方便从配方视角手工验证表达式。
 
 ### devlop / shell 交互终端
@@ -247,7 +247,8 @@ devlop 用户名@PC名 完整所在路径 $
 * 整串只含一个表达式时保留结果原始类型（数字、列表、字典等），否则把各段结果
   转成字符串后拼接；
 * 命名空间包含完整 builtins（可以 `import`），以及 `get_recipe_path()`（当前配方
-  路径）与 `get_system_info()`（当前系统标识）；
+  所在目录的绝对路径，不含文件名）、`get_recipe_name()`（当前配方文件名）与
+  `get_system_info()`（当前系统标识）；
 * 支持嵌套花括号（如 `{'a': {'b': 1}}`），引号内的花括号不参与配对；
 * 求值失败会打印完整 Python 报错并**强制终止整个工作流**，不受任何 `errskip` 影响。
 

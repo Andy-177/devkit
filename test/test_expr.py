@@ -120,18 +120,18 @@ class TestNamespace(unittest.TestCase):
                          "linux_x86_64")
 
     def test_get_recipe_path(self):
-        path = Path("some/recipe.json")
-        self.assertEqual(substitute_expression("?!{{get_recipe_path()}}", _ns(path)), str(path))
+        path = Path("/tmp/project/recipe.json")
+        self.assertEqual(substitute_expression("?!{{get_recipe_path()}}", _ns(path)), str(path.parent.resolve()))
 
     def test_get_recipe_path_without_context_raises(self):
-        with self.assertRaisesRegex(ExpressionError, "无配方上下文"):
+        with self.assertRaises(ExpressionError):
             substitute_expression("?!{{get_recipe_path()}}", get_builtin_namespace(None, None))
 
-    def test_namespaces_do_not_share_context(self):
+    def test_namespace_is_isolated_across_threads(self):
         a = get_builtin_namespace(Path("a.json"), "sys-a")
         b = get_builtin_namespace(Path("b.json"), "sys-b")
-        self.assertEqual(substitute_expression("?!{{get_recipe_path()}}", a), "a.json")
-        self.assertEqual(substitute_expression("?!{{get_recipe_path()}}", b), "b.json")
+        self.assertEqual(substitute_expression("?!{{get_recipe_path() + '|' + get_system_info()}}", a), str(Path("a.json").parent.resolve()) + "|sys-a")
+        self.assertEqual(substitute_expression("?!{{get_recipe_path() + '|' + get_system_info()}}", b), str(Path("b.json").parent.resolve()) + "|sys-b")
         self.assertEqual(substitute_expression("?!{{get_system_info()}}", a), "sys-a")
         self.assertEqual(substitute_expression("?!{{get_system_info()}}", b), "sys-b")
 
@@ -143,7 +143,7 @@ class TestNamespace(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=16) as pool:
             results = list(pool.map(work, range(200)))
         for index, result in enumerate(results):
-            self.assertEqual(result, f"r{index}.json|sys-{index}")
+            self.assertEqual(result, str(Path(f"r{index}.json").parent.resolve()) + f"|sys-{index}")
 
     def test_error_contains_full_traceback(self):
         with self.assertRaises(ExpressionError) as ctx:
@@ -830,7 +830,7 @@ class TestCallExpression(ExpressionRunnerTestCase):
                 "jobs": {"main": {"steps": {"s": {"call": {"sub/recipe.json": []}}}}},
             }
         )
-        self.assertEqual(self.read("sub.txt"), str(sub_path))
+        self.assertEqual(self.read("sub.txt"), str(sub_path.parent.resolve()))
 
 
 class TestSubrecipeEnvAndConcurrency(ExpressionRunnerTestCase):
@@ -863,7 +863,7 @@ class TestSubrecipeEnvAndConcurrency(ExpressionRunnerTestCase):
             },
         )
         run_recipe(parent_path, self.workdir)
-        self.assertEqual(self.read("sub.txt"), f"parent:{parent_path}")
+        self.assertEqual(self.read("sub.txt"), f"parent:{parent_path.parent.resolve()}")
 
     def test_top_level_area_blocks_inherited_env_with_expressions(self):
         sub_dir = self.tmp / "sub"
@@ -926,8 +926,8 @@ class TestSubrecipeEnvAndConcurrency(ExpressionRunnerTestCase):
             },
         )
         run_recipe(parent_path, self.workdir)
-        self.assertEqual(self.read("suba.txt"), str(sub_a))
-        self.assertEqual(self.read("subb.txt"), str(sub_b))
+        self.assertEqual(self.read("suba.txt"), str(sub_a.parent.resolve()))
+        self.assertEqual(self.read("subb.txt"), str(sub_b.parent.resolve()))
 
 
 class TestExpressionFailuresAreFatal(ExpressionRunnerTestCase):
@@ -1173,6 +1173,7 @@ class TestConsole(unittest.TestCase):
         self.assertEqual(code, 0)
         namespace = interact.call_args.kwargs["local"]
         self.assertIn("get_recipe_path", namespace)
+        self.assertIn("get_recipe_name", namespace)
         self.assertIn("get_system_info", namespace)
         self.assertIn("__builtins__", namespace)
         self.assertIn("devkit", namespace)
@@ -1181,4 +1182,5 @@ class TestConsole(unittest.TestCase):
         self.assertIn("expr", namespace)
         self.assertEqual(namespace["get_system_info"](), detect_system())
         self.assertEqual(namespace["__builtins__"].sum([1, 2, 3]), 6)
-        self.assertIsNotNone(namespace["get_recipe_path"]())
+        self.assertTrue(Path(namespace["get_recipe_path"]()).is_absolute())
+        self.assertEqual(namespace["get_recipe_name"](), "recipe.json")

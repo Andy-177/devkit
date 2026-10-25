@@ -4,7 +4,8 @@
 整串只含一个表达式时返回表达式结果的原始类型，否则把各段结果 ``str()`` 后拼接。
 表达式的命名空间包含完整 builtins（可以 ``import``），另有两个内置函数:
 
-* ``get_recipe_path()``: 当前配方的路径（字符串）；
+* ``get_recipe_path()``: 当前配方的目录路径（绝对路径，不含文件名）；
+* ``get_recipe_name()``: 当前配方的文件名；
 * ``get_system_info()``: 当前系统标识（如 ``win_amd64`` / ``linux_x86_64``）。
 
 求值失败会抛出 :class:`~devkit.errors.ExpressionError`（带完整 Python 报错信息），
@@ -94,9 +95,14 @@ def _get_recipe_path(recipe_path: Path | None) -> Callable[[], str]:
     def get_recipe_path() -> str:
         if recipe_path is None:
             raise ExpressionError("表达式内 get_recipe_path() 无法使用：当前无配方上下文")
-        return str(recipe_path)
+        return str(recipe_path.parent.resolve())
 
-    return get_recipe_path
+    def get_recipe_name() -> str:
+        if recipe_path is None:
+            raise ExpressionError("表达式内 get_recipe_name() 无法使用：当前无配方上下文")
+        return recipe_path.name
+
+    return get_recipe_path, get_recipe_name
 
 
 def _get_system_info(system: str | None) -> Callable[[], str]:
@@ -113,8 +119,10 @@ def get_builtin_namespace(
 
     每次求值都应携带自己的配方路径/系统，避免并发联动时上下文互相串扰。
     """
+    get_recipe_path_fn, get_recipe_name_fn = _get_recipe_path(recipe_path)
     return {
-        "get_recipe_path": _get_recipe_path(recipe_path),
+        "get_recipe_path": get_recipe_path_fn,
+        "get_recipe_name": get_recipe_name_fn,
         "get_system_info": _get_system_info(system),
         "__builtins__": builtins,
     }
