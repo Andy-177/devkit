@@ -100,13 +100,7 @@ def _add_recipe_arguments(parser: argparse.ArgumentParser, *, with_job: bool) ->
         "-w",
         "--workdir",
         default=str(DEFAULT_WORKDIR),
-        help=f"工作区目录，build 指令在这里执行，克隆落在其 workspace 子目录 (默认: {DEFAULT_WORKDIR})",
-    )
-    parser.add_argument(
-        "-d",
-        "--download-dir",
-        default=str(DEFAULT_DOWNLOAD_DIR),
-        help=f"下载目录，所有下载的文件都放这里 (默认: {DEFAULT_DOWNLOAD_DIR})",
+        help=f"工作区目录，run 指令在这里执行，下载/解压也落到这里，克隆落在其 workspace 子目录 (默认: {DEFAULT_WORKDIR})",
     )
     parser.add_argument("-s", "--system", default=None, help="覆盖自动检测的系统标识")
     if with_job:
@@ -206,15 +200,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             runner = RecipeRunner(
                 workdir=Path(args.workdir),
                 system=args.system,
-                download_dir=Path(args.download_dir),
                 dry_run=args.dry_run,
             )
             logger.info(
-                "devkit {} | 系统: {} | 工作区: {} | 下载目录: {}",
+                "devkit {} | 系统: {} | 工作区: {}",
                 __version__,
                 runner.system,
                 runner.workdir,
-                runner.download_dir,
             )
             if args.dry_run:
                 logger.info("dry-run 模式: 不会执行克隆/下载/指令")
@@ -233,16 +225,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         runner = RecipeRunner(
             workdir=Path(args.workdir),
             system=args.system,
-            download_dir=Path(args.download_dir),
             dry_run=args.dry_run,
             jobs=args.job,
         )
         logger.info(
-            "devkit {} | 系统: {} | 工作区: {} | 下载目录: {}",
+            "devkit {} | 系统: {} | 工作区: {}",
             __version__,
             runner.system,
             runner.workdir,
-            runner.download_dir,
         )
         if args.dry_run:
             logger.info("dry-run 模式: 不会执行克隆/下载/指令")

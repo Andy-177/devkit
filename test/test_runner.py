@@ -480,7 +480,7 @@ class TestDownloadUnzipInRecipe(RunnerTestCase):
         self.assertFalse(runner.failed)
         self.assertFalse((self.workdir / "remote.zip").exists())  # 系统过滤掉，没触网
         # 缺省 extract=false: 解压到与压缩包同名的子目录
-        self.assertTrue((self.workdir / "dl" / "assets" / "extracted.txt").exists())
+        self.assertTrue((self.workdir / "assets" / "extracted.txt").exists())
         self.assertTrue((self.workdir / "done.txt").exists())
 
     def test_unzip_extract_true_flattens(self):
@@ -494,7 +494,7 @@ class TestDownloadUnzipInRecipe(RunnerTestCase):
             "jobs": {"main": {"steps": {"s": {"run": [echo_write("done.txt")]}}}},
         })
         run_recipe(path, self.workdir)
-        self.assertTrue((self.workdir / "dl" / "flat.txt").exists())
+        self.assertTrue((self.workdir / "flat.txt").exists())
 
     def test_unpack_downloads_then_extracts(self):
         import zipfile
@@ -516,7 +516,7 @@ class TestDownloadUnzipInRecipe(RunnerTestCase):
         with mock.patch("devkit.unpack.download_one", side_effect=fake_download):
             runner = run_recipe(path, self.workdir)
         self.assertFalse(runner.failed)
-        dl = self.workdir / "dl"
+        dl = self.workdir
         self.assertTrue((dl / ".dkcache" / "bundle.zip").exists())  # 缓存
         self.assertTrue((dl / "inner.txt").exists())               # extract=true 直接铺开
 
@@ -539,7 +539,7 @@ class TestDownloadUnzipInRecipe(RunnerTestCase):
         })
         with mock.patch("devkit.unpack.download_one", side_effect=fake_download):
             run_recipe(path, self.workdir)
-        dl = self.workdir / "dl"
+        dl = self.workdir
         self.assertTrue((dl / "bundle" / "inner.txt").exists())
 
 

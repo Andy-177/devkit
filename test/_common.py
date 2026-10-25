@@ -40,7 +40,7 @@ def write_recipe(directory: Path, raw: dict, name: str = "recipe.json") -> Path:
 
 def make_runner(workdir: Path, **kwargs) -> RecipeRunner:
     """构造一个跑在临时目录里的 RecipeRunner。"""
-    kwargs.setdefault("download_dir", workdir / "dl")
+    kwargs.pop("download_dir", None)
     kwargs.setdefault("system", TEST_SYSTEM)
     return RecipeRunner(workdir=workdir, **kwargs)
 

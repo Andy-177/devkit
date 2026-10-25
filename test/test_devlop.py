@@ -127,7 +127,7 @@ class TestPrepare(DevlopTestCase):
 
         self.assertEqual(cwd, self.workdir)
         self.assertEqual(recipe.path, path)
-        self.assertTrue((self.workdir / "dl" / "assets" / "hello.txt").is_file())
+        self.assertTrue((self.workdir / "assets" / "hello.txt").is_file())
         self.assertFalse((self.workdir / "job.txt").exists())
 
     def test_env_is_recipe_level_only(self):
@@ -285,7 +285,6 @@ class TestCli(DevlopTestCase):
         with mock.patch("devkit.devlop.run_devlop", return_value=0) as run:
             code, _, _ = self.run_cli([
                 "devlop", "x.json", "-w", str(self.workdir),
-                "-d", str(self.workdir / "dl"),
             ])
         self.assertEqual(code, 0)
         run.assert_called_once()
@@ -295,7 +294,6 @@ class TestCli(DevlopTestCase):
         with mock.patch("devkit.devlop.run_devlop", return_value=0) as run:
             code, _, _ = self.run_cli([
                 "shell", "x.json", "-w", str(self.workdir),
-                "-d", str(self.workdir / "dl"),
             ])
         self.assertEqual(code, 0)
         run.assert_called_once()
@@ -303,7 +301,7 @@ class TestCli(DevlopTestCase):
 
     def test_shell_hides_info_logs(self):
         path = write_recipe(self.tmp, {})
-        argv = ["-w", str(self.workdir), "-d", str(self.workdir / "dl")]
+        argv = ["-w", str(self.workdir)]
         with mock.patch("devkit.devlop.DevlopShell.run"):
             code, _, err = self.run_cli(["shell", str(path), *argv])
         self.assertEqual(code, 0)
@@ -312,7 +310,7 @@ class TestCli(DevlopTestCase):
 
     def test_devlop_shows_info_logs(self):
         path = write_recipe(self.tmp, {})
-        argv = ["-w", str(self.workdir), "-d", str(self.workdir / "dl")]
+        argv = ["-w", str(self.workdir)]
         with mock.patch("devkit.devlop.DevlopShell.run"):
             code, _, err = self.run_cli(["devlop", str(path), *argv])
         self.assertEqual(code, 0)
@@ -321,7 +319,7 @@ class TestCli(DevlopTestCase):
     def test_missing_recipe_returns_1_without_entering_terminal(self):
         code, _, err = self.run_cli([
             "devlop", str(self.tmp / "absent.json"),
-            "-w", str(self.workdir), "-d", str(self.workdir / "dl"),
+            "-w", str(self.workdir),
         ])
         self.assertEqual(code, 1)
         self.assertIn("不存在", err)
@@ -329,7 +327,7 @@ class TestCli(DevlopTestCase):
     def test_shell_missing_recipe_still_reports_error(self):
         code, _, err = self.run_cli([
             "shell", str(self.tmp / "absent.json"),
-            "-w", str(self.workdir), "-d", str(self.workdir / "dl"),
+            "-w", str(self.workdir),
         ])
         self.assertEqual(code, 1)
         self.assertIn("不存在", err)

@@ -30,8 +30,7 @@ class CliTestCase(unittest.TestCase):
         return code, out.getvalue(), err.getvalue()
 
     def base_argv(self, recipe: Path) -> list[str]:
-        return ["build", str(recipe), "-w", str(self.workdir),
-                "-d", str(self.workdir / "dl")]
+        return ["build", str(recipe), "-w", str(self.workdir)]
 
 
 class TestParser(CliTestCase):
@@ -102,15 +101,14 @@ class TestRunCommand(CliTestCase):
         path = simple_recipe(self.tmp, steps={
             "s": {"run": [echo_write("x.txt")]}},
         )
-        code, _, _ = self.run_cli([str(path), "-w", str(self.workdir), "--dry-run"])
+        code, _, _ = self.run_cli([str(path), "-w", str(self.workdir)])
         self.assertEqual(code, 0)
 
     def test_run_alias_executes_recipe(self):
         path = simple_recipe(self.tmp, steps={
             "s": {"run": [echo_write("ok.txt", "fine")]}},
         )
-        code, _, _ = self.run_cli(["run", str(path), "-w", str(self.workdir),
-                                   "-d", str(self.workdir / "dl")])
+        code, _, _ = self.run_cli(["run", str(path), "-w", str(self.workdir)])
         self.assertEqual(code, 0)
         self.assertEqual((self.workdir / "ok.txt").read_text(
             encoding="utf-8", errors="replace").strip(), "fine")

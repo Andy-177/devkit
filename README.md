@@ -75,8 +75,7 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 
 | 参数 | 说明 | 默认 |
 |---|---|---|
-| `-w, --workdir` | 工作区，run 指令在这里执行，克隆落在其 `workspace` 子目录 | `.devkit` |
-| `-d, --download-dir` | 下载/解压落地目录 | `.devkit` |
+| `-w, --workdir` | 工作区，run 指令在这里执行，下载/解压也落到这里，克隆落在其 `workspace` 子目录 | `.devkit` |
 | `-s, --system` | 覆盖自动检测的系统标识 | 自动检测 |
 | `-j, --job` | 只执行指定名称的工作流，可重复 | 全部 |
 | `--dry-run` | 只打印要做的事，不克隆/不下载/不执行 | 关 |
@@ -159,11 +158,10 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
   * `system`（可选）：单个字符串或列表，缺省对所有系统生效；
   * `extract`（可选，缺省 `false`，仅 `unzip`/`unpack`）：`true` 时把压缩包里的内容
     直接铺到下载目录，否则先在下载目录下建一个与压缩包同名的子目录再解压进去；
-  * `download` 是纯下载，只有 `url` 和 `system`，没有 `extract`；下载文件统一落在
-    下载目录；
-  * `unzip` 的本地 zip 按 "配方目录 -> 克隆的 workspace -> 工作区 -> 下载目录"
-    顺序查找；`unpack` 先把 zip 下载到 `<下载目录>/.dkcache` 缓存，再解压释放；
-  * 两者都解压到下载目录（默认 `.devkit`），含 zip-slip 防护。
+  * `download` 是纯下载，只有 `url` 和 `system`，没有 `extract`；下载文件统一落在工作区目录；
+  * `unzip` 的本地 zip 按 "配方目录 -> 克隆的 workspace -> 工作区" 顺序查找；`unpack`
+    先把 zip 下载到 `<工作区>/.dkcache` 缓存，再解压释放；
+  * 两者都解压到工作区目录（默认 `.devkit`），含 zip-slip 防护。
 
 ### env / area 环境块（可选）
 

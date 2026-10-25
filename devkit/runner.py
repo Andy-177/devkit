@@ -3,17 +3,13 @@
 工作目录约定:
 
 * ``--workdir``（默认 ``./.devkit``）是配方的工作区，``run`` 里的指令在这里
-  执行；
+  执行。下载、解压也统一落到这个工作区；
 * 顶层配方若自带 material，克隆结果落在工作区下的 ``workspace`` 子目录；
   被 ``call`` 的配方若自带 material，则在父工作区下用配方文件名（去掉扩展名）
   开一个子目录，克隆结果落在该子目录的 ``workspace`` 里，避免互相覆盖；没有
   material 的被调用配方与父配方共用工作区；
-* 下载文件不放进工作区，统一落在下载目录 ``--download-dir``（默认 ``./.devkit``，
-  与默认工作区相同），配方里用 ``<文件名>`` 这类相对路径引用；
-* ``unzip`` 解压出的内容也统一落到下载目录，zip 自身按"配方目录 ->
-  克隆的 workspace 子目录 -> 工作区 -> 下载目录"的顺序查找；
-* ``unpack`` 是 download 与 unzip 的结合体：zip 先下载到 ``<下载目录>/.dkcache``
-  缓存，再解压释放到下载目录。
+* zip 文件按"配方目录 -> 克隆的 workspace 子目录 -> 工作区"的顺序查找；
+* ``unpack`` 的 zip 先下载到 ``<工作区>/.dkcache`` 缓存，再解压释放到工作区。
 
 执行顺序与步骤控制:
 
@@ -85,9 +81,9 @@ from devkit.system import detect_system
 from devkit.unpack import unpack_one
 from devkit.unzip import unzip_one
 
-#: 默认工作区（run 指令的执行目录）
+#: 默认工作区（run 指令的执行目录，下载、解压也放这里）
 DEFAULT_WORKDIR = Path(".devkit")
-#: 默认下载目录（所有下载的文件都放这里）
+#: 默认下载目录（保留兼容名，实际等同于工作区）
 DEFAULT_DOWNLOAD_DIR = Path(".devkit")
 
 #: 克隆结果落在工作区下的这个子目录里
@@ -109,14 +105,11 @@ class RecipeRunner:
         workdir: Path | str,
         system: str | None = None,
         *,
-        download_dir: Path | str | None = None,
         dry_run: bool = False,
         jobs: Sequence[str] | None = None,
     ) -> None:
         self.workdir = Path(workdir).expanduser()
-        self.download_dir = (
-            Path(download_dir).expanduser() if download_dir is not None else DEFAULT_DOWNLOAD_DIR
-        )
+        self.download_dir = self.workdir
         self.system = system or detect_system()
         self.dry_run = dry_run
         self.job_filter = set(jobs) if jobs else None

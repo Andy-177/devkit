@@ -65,7 +65,7 @@ class TestRepoRecipes(unittest.TestCase):
         self._require(REPO_RECIPE)
         with tempfile.TemporaryDirectory() as td:
             proc = run_cli("build", str(REPO_RECIPE), "--dry-run",
-                           "-w", td, "-d", td, cwd=ROOT)
+                           "-w", td, cwd=ROOT)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("配方", proc.stderr)
         self.assertIn("全部完成", proc.stderr)
@@ -74,7 +74,7 @@ class TestRepoRecipes(unittest.TestCase):
         """example/hello.json 真实执行（纯 echo，无网络），参数经 call data 绑定。"""
         self._require(HELLO_RECIPE)
         with tempfile.TemporaryDirectory() as td:
-            proc = run_cli("build", str(HELLO_RECIPE), "-w", td, "-d", td, cwd=ROOT)
+            proc = run_cli("build", str(HELLO_RECIPE), "-w", td, cwd=ROOT)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("hi", proc.stdout)      # data[0] = "hi"
         self.assertIn("0", proc.stdout)       # data[1] 占位符（顶层配方里是普通数据）
@@ -84,7 +84,7 @@ class TestRepoRecipes(unittest.TestCase):
         self._require(REPO_RECIPE)
         with tempfile.TemporaryDirectory() as td:
             before = set(Path(td).iterdir())
-            run_cli("build", str(REPO_RECIPE), "--dry-run", "-w", td, "-d", td, cwd=ROOT)
+            run_cli("build", str(REPO_RECIPE), "--dry-run", "-w", td, cwd=ROOT)
             after = set(Path(td).iterdir())
         self.assertEqual(before, after)
 
@@ -100,8 +100,8 @@ class TestRecipeSuitesOnDisk(unittest.TestCase):
             with self.subTest(recipe=recipe_file.name):
                 with tempfile.TemporaryDirectory() as td:
                     proc = run_cli("build", str(recipe_file), "--dry-run",
-                                   "-w", td, "-d", td, cwd=ROOT)
-                self.assertEqual(proc.returncode, 0, proc.stderr)
+                                   "-w", td, cwd=ROOT)
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
 
 
 if __name__ == "__main__":
