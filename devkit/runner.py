@@ -132,7 +132,7 @@ class RecipeRunner:
         )
 
     def _get_expr_ns(self, recipe: Recipe):
-        return get_builtin_namespace(recipe.path, self.system)
+        return get_builtin_namespace(recipe.path, self.system, self.workdir)
 
     def _effective_expr(self, recipe: Recipe, job: Job | None = None, step: Step | None = None):
         return get_effective_expression(

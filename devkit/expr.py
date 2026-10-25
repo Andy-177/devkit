@@ -6,6 +6,7 @@
 
 * ``get_recipe_path()``: 当前配方的目录路径（绝对路径，不含文件名）；
 * ``get_recipe_name()``: 当前配方的文件名；
+* ``get_workdir_path()``: 当前工作区目录路径（绝对路径，含目录名）；
 * ``get_system_info()``: 当前系统标识（如 ``win_amd64`` / ``linux_x86_64``）。
 
 求值失败会抛出 :class:`~devkit.errors.ExpressionError`（带完整 Python 报错信息），
@@ -91,7 +92,21 @@ ExpressionConfig = bool | tuple[str, ...] | list[str] | None
 _FEATURE_ALIASES = {"material": "clone"}
 
 
-def _get_recipe_path(recipe_path: Path | None) -> Callable[[], str]:
+def _get_workdir_path(workdir: Path | None) -> tuple[Callable[[], str], Callable[[], str]]:
+    def get_workdir_path() -> str:
+        if workdir is None:
+            raise ExpressionError("表达式内 get_workdir_path() 无法使用：当前无工作区上下文")
+        return str(workdir.resolve())
+
+    def get_workdir_name() -> str:
+        if workdir is None:
+            raise ExpressionError("表达式内 get_workdir_name() 无法使用：当前无工作区上下文")
+        return workdir.resolve().name
+
+    return get_workdir_path, get_workdir_name
+
+
+def _get_recipe_path(recipe_path: Path | None) -> tuple[Callable[[], str], Callable[[], str]]:
     def get_recipe_path() -> str:
         if recipe_path is None:
             raise ExpressionError("表达式内 get_recipe_path() 无法使用：当前无配方上下文")
@@ -113,16 +128,21 @@ def _get_system_info(system: str | None) -> Callable[[], str]:
 
 
 def get_builtin_namespace(
-    recipe_path: Path | None = None, system: str | None = None
+    recipe_path: Path | None = None,
+    system: str | None = None,
+    workdir: Path | None = None,
 ) -> dict[str, Any]:
     """构造一个独立的表达式命名空间（闭包持有上下文，线程安全）。
 
     每次求值都应携带自己的配方路径/系统，避免并发联动时上下文互相串扰。
     """
     get_recipe_path_fn, get_recipe_name_fn = _get_recipe_path(recipe_path)
+    get_workdir_path_fn, get_workdir_name_fn = _get_workdir_path(workdir)
     return {
         "get_recipe_path": get_recipe_path_fn,
         "get_recipe_name": get_recipe_name_fn,
+        "get_workdir_path": get_workdir_path_fn,
+        "get_workdir_name": get_workdir_name_fn,
         "get_system_info": _get_system_info(system),
         "__builtins__": builtins,
     }

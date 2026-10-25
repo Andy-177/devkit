@@ -167,7 +167,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             logger.error("{}", exc)
             return 1
 
-        ns = get_builtin_namespace(recipe_path, detect_system())
+        ns = get_builtin_namespace(recipe_path, detect_system(), Path(DEFAULT_WORKDIR))
         for module_name in (
             "cli",
             "recipe",
