@@ -1,6 +1,6 @@
-"""develop/devlop 终端配色（用户可修改）。
+"""develop 终端配色（用户可修改）。``devlop_shell_color()`` 为旧名兼容别名。
 
-``devlop_shell_color()`` 必须返回 6 个颜色字符串组成的元组，依次对应：
+``develop_shell_color()`` 必须返回 6 个颜色字符串组成的元组，依次对应：
 
 ``(develop, 用户名@主机名, 路径, $, └─>, ╰>)``
 
@@ -10,8 +10,12 @@
 from __future__ import annotations
 
 
-def devlop_shell_color():
+def develop_shell_color():
     return sky
+
+
+def devlop_shell_color():
+    return develop_shell_color()
 
 
 cherry = ("#e09bff", "#8a52bc", "#6b73ad", "#cc87eb", "#6b73ad", "#6b73ad")

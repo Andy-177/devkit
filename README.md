@@ -14,16 +14,16 @@
   * `dulwich` — `material` 克隆需要
   * `littledl` — `download` 下载需要
   * `loguru` — 彩色日志（可选）
-  * `prompt_toolkit` — `devlop` 交互终端需要
+  * `prompt_toolkit` — `develop` 交互终端需要（`devlop` 为兼容别名）
 
 ## 用法
 
 ```text
 devkit build recipe.json                # 执行配方
 devkit run recipe.json                  # build 的别名，完全等价
-devkit devlop recipe.json               # 执行非 jobs 部分后进入交互终端
-devkit develop recipe.json              # devlop 的别名，效果完全一致
-devkit shell recipe.json                # devlop 的别名，但不显示日志
+devkit develop recipe.json              # 执行非 jobs 部分后进入交互终端
+devkit devlop recipe.json               # develop 的别名（旧拼写，兼容保留）
+devkit shell recipe.json                # develop 的别名，但不显示日志
 devkit build bon/recipe.json -w build   # 指定工作区
 devkit build recipe.json -j build-windows --dry-run
 devkit recipe.json                      # 省略 build 也行
@@ -198,15 +198,16 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 并注入 `devkit` 包及各子模块（`recipe`/`runner`/`expr` 等），
 方便从配方视角手工验证表达式。
 
-### devlop / shell 交互终端
+### develop / shell 交互终端
 
-`devkit devlop recipe.json` 先执行配方的非 `jobs` 部分（`material`/`download`/
+`devkit develop recipe.json` 先执行配方的非 `jobs` 部分（`material`/`download`/
 `unzip`/`unpack`），然后进入交互终端。终端默认工作目录是 `--workdir`；命令通过与
 `run` 相同的执行路径运行，因此继承配方级 `env`/`area`，但不会继承作业级、步骤级
 环境。`cd`/`chdir`、`exit`/`quit`/`logout` 是终端内建命令。
 
-`devkit develop recipe.json` 是 devlop 的别名，效果完全一致。`devkit shell recipe.json`
-也是 devlop 的别名，行为完全一致，只是隐藏 INFO/DEBUG 日志，界面更简洁；错误仍会显示。
+`devkit devlop recipe.json` 是 `develop` 的旧拼写别名，保留兼容，效果完全一致。
+`devkit shell recipe.json` 也是 `develop` 的别名，行为完全一致，只是隐藏 INFO/DEBUG
+日志，界面更简洁；错误仍会显示。
 
 ```text
 develop 用户名@PC名 完整所在路径 $
@@ -217,9 +218,10 @@ develop 用户名@PC名 完整所在路径 $
 等价于 `cd /?`）。Enter 执行，Ctrl-J 换行（行数不限），Ctrl-D 退出。参数与 `build`
 相同，但没有 `-j/--job`。
 
-提示符颜色由 `devkit/_color.py` 的 `devlop_shell_color()` 决定，返回一个 6 元组，
-依次对应 `(develop, 用户名@主机名, 路径, $, └─>, ╰>)`。无法调用或格式不正确时
-使用全白色；修改后重新进入 develop/devlop 生效。
+提示符颜色由 `devkit/_color.py` 的 `develop_shell_color()` 决定（兼容旧名
+`devlop_shell_color()`），返回一个 6 元组，依次对应
+`(develop, 用户名@主机名, 路径, $, └─>, ╰>)`。无法调用或格式不正确时使用全白色；
+修改后重新进入 develop 生效。
 
 ### 表达式 `?!{{...}}`
 

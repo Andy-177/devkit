@@ -4,9 +4,9 @@
 
     devkit build recipe.json               # 执行配方
     devkit run recipe.json                 # build 的别名，等价
-    devkit devlop recipe.json              # 执行非 jobs 部分后进入交互终端
-    devkit develop recipe.json             # devlop 的别名，效果完全一致
-    devkit shell recipe.json               # devlop 的别名，但不显示日志
+    devkit develop recipe.json             # 执行非 jobs 部分后进入交互终端
+    devkit devlop recipe.json              # develop 的别名（旧拼写，兼容保留）
+    devkit shell recipe.json               # develop 的别名，但不显示日志
     devkit build bon/recipe.json -w build  # 指定工作目录
     devkit build recipe.json -j build-windows --dry-run
     devkit system                        # 打印当前系统标识
@@ -71,15 +71,15 @@ def build_parser() -> argparse.ArgumentParser:
     build = subparsers.add_parser("build", aliases=["run"], help="执行一个配方（run 是别名）")
     _add_run_arguments(build)
 
-    devlop = subparsers.add_parser(
-        "devlop",
-        aliases=["develop"],
-        help="执行配方的非 jobs 部分，然后进入 devkit 交互终端（develop 是别名）",
+    develop = subparsers.add_parser(
+        "develop",
+        aliases=["devlop"],
+        help="执行配方的非 jobs 部分，然后进入 devkit 交互终端（devlop 为旧拼写别名）",
     )
-    _add_recipe_arguments(devlop, with_job=False)
+    _add_recipe_arguments(develop, with_job=False)
 
     shell = subparsers.add_parser(
-        "shell", help="devlop 的别名：执行非 jobs 部分后进入终端，但不显示日志"
+        "shell", help="develop 的别名：执行非 jobs 部分后进入终端，但不显示日志"
     )
     _add_recipe_arguments(shell, with_job=False)
 
@@ -198,7 +198,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command in {"devlop", "develop", "shell"}:
-        from devkit.devlop import run_devlop
+        from devkit.develop import run_develop
 
         try:
             runner = RecipeRunner(
@@ -214,7 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if args.dry_run:
                 logger.info("dry-run 模式: 不会执行克隆/下载/指令")
-            return run_devlop(runner, args.recipe)
+            return run_develop(runner, args.recipe)
         except StepError as exc:
             logger.error("执行失败: {}", exc)
             return exc.returncode or 1

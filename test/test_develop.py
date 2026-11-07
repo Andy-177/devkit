@@ -1,4 +1,4 @@
-"""devlop 命令与交互终端测试。"""
+"""develop 命令与交互终端测试（``devlop`` 为兼容别名）。"""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-from devkit import _color, devlop
+from devkit import _color, develop
 from devkit.cli import build_parser, main
-from devkit.devlop import DevlopShell, join_input_lines, prompt_text
+from devkit.develop import DevelopShell, join_input_lines, prompt_text
 from _common import FAIL_CMD, PY_SPACED, echo_write, make_runner, write_recipe
 
 CHERRY = ("#e09bff", "#8a52bc", "#6b73ad", "#cc87eb", "#6b73ad", "#6b73ad")
@@ -28,28 +28,31 @@ def make_zip(path: Path, members: dict[str, str]) -> Path:
     return path
 
 
-class DevlopTestCase(unittest.TestCase):
+class DevelopTestCase(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
         self.tmp = Path(self._td.name)
         self.addCleanup(self._td.cleanup)
         self.workdir = self.tmp / "work"
 
-    def setup_shell(self, raw: dict) -> DevlopShell:
+    def setup_shell(self, raw: dict) -> DevelopShell:
         path = write_recipe(self.tmp, raw)
         runner = make_runner(self.workdir)
-        recipe, cwd = runner.prepare_devlop(path)
-        return DevlopShell(runner, recipe, cwd, env=runner.devlop_env(recipe),
-                           workdir=runner.workdir)
+        prepare = getattr(runner, "prepare_develop", runner.prepare_devlop)
+        recipe, cwd = prepare(path)
+        develop_env = getattr(runner, "develop_env", runner.devlop_env)
+        return DevelopShell(
+            runner, recipe, cwd, env=develop_env(recipe), workdir=runner.workdir
+        )
 
 
-class TestPrompt(DevlopTestCase):
+class TestPrompt(DevelopTestCase):
     def test_prompt_contains_user_host_and_absolute_path(self):
         text = prompt_text(self.tmp, user="u", host="h")
         self.assertEqual(text, f"develop u@h {self.tmp.resolve()} $\n└─> ")
 
     def test_continuation_prompt(self):
-        self.assertEqual(devlop.CONTINUATION, " ╰> ")
+        self.assertEqual(develop.CONTINUATION, " ╰> ")
 
     def test_join_input_lines(self):
         self.assertEqual(join_input_lines("cd\n/?"), "cd /?")
@@ -58,16 +61,16 @@ class TestPrompt(DevlopTestCase):
         self.assertEqual(join_input_lines("echo\n\n hi "), "echo hi")
 
 
-class TestColor(DevlopTestCase):
+class TestColor(DevelopTestCase):
     def test_normalize_accepts_six_color_tuple(self):
-        self.assertEqual(devlop.normalize_shell_colors(CHERRY), CHERRY)
+        self.assertEqual(develop.normalize_shell_colors(CHERRY), CHERRY)
 
     def test_normalize_strips_color_whitespace(self):
         padded = tuple(f" {color} " for color in CHERRY)
-        self.assertEqual(devlop.normalize_shell_colors(padded), CHERRY)
+        self.assertEqual(develop.normalize_shell_colors(padded), CHERRY)
 
     def test_normalize_falls_back_to_white(self):
-        white = devlop.DEFAULT_COLORS
+        white = develop.DEFAULT_COLORS
         self.assertEqual(len(white), 6)
         self.assertEqual(set(white), {"#ffffff"})
 
@@ -82,25 +85,29 @@ class TestColor(DevlopTestCase):
             None,
         ):
             with self.subTest(value=value):
-                self.assertEqual(devlop.normalize_shell_colors(value), white)
+                self.assertEqual(develop.normalize_shell_colors(value), white)
 
     def test_load_reads_user_function(self):
-        self.assertEqual(devlop.load_shell_colors(lambda: CHERRY), CHERRY)
+        self.assertEqual(develop.load_shell_colors(lambda: CHERRY), CHERRY)
 
     def test_load_falls_back_when_function_raises(self):
         def boom():
             raise RuntimeError("boom")
 
-        self.assertEqual(devlop.load_shell_colors(boom), devlop.DEFAULT_COLORS)
+        self.assertEqual(develop.load_shell_colors(boom), develop.DEFAULT_COLORS)
 
     def test_load_reads_color_file(self):
+        color_func = getattr(_color, "develop_shell_color", None) or _color.devlop_shell_color
         self.assertEqual(
-            devlop.load_shell_colors(),
-            devlop.normalize_shell_colors(_color.devlop_shell_color()),
+            develop.load_shell_colors(),
+            develop.normalize_shell_colors(color_func()),
         )
 
+    def test_devlop_color_name_still_works(self):
+        self.assertTrue(callable(_color.devlop_shell_color))
+
     def test_prompt_fragments_use_all_six_colors(self):
-        fragments = devlop.prompt_fragments(
+        fragments = develop.prompt_fragments(
             self.tmp, user="u", host="h", colors=CHERRY
         )
         self.assertIn(("fg:#e09bff", "develop"), fragments)
@@ -108,14 +115,14 @@ class TestColor(DevlopTestCase):
         self.assertIn(("fg:#6b73ad", str(self.tmp.resolve())), fragments)
         self.assertIn(("fg:#cc87eb", "$"), fragments)
         self.assertIn(("fg:#6b73ad", "└─>"), fragments)
-        self.assertIn(("fg:#6b73ad", "╰>"), devlop.continuation_fragments(CHERRY))
+        self.assertIn(("fg:#6b73ad", "╰>"), develop.continuation_fragments(CHERRY))
 
     def test_shell_loads_colors(self):
         shell = self.setup_shell({})
-        self.assertEqual(shell.colors, devlop.load_shell_colors())
+        self.assertEqual(shell.colors, develop.load_shell_colors())
 
 
-class TestPrepare(DevlopTestCase):
+class TestPrepare(DevelopTestCase):
     def test_prepare_runs_non_job_parts_only(self):
         make_zip(self.tmp / "assets.zip", {"hello.txt": "hi"})
         path = write_recipe(self.tmp, {
@@ -123,7 +130,8 @@ class TestPrepare(DevlopTestCase):
             "jobs": {"main": {"steps": {"s": {"run": [echo_write("job.txt")]}}}},
         })
         runner = make_runner(self.workdir)
-        recipe, cwd = runner.prepare_devlop(path)
+        prepare = getattr(runner, "prepare_develop", runner.prepare_devlop)
+        recipe, cwd = prepare(path)
 
         self.assertEqual(cwd, self.workdir)
         self.assertEqual(recipe.path, path)
@@ -142,8 +150,10 @@ class TestPrepare(DevlopTestCase):
             }},
         })
         runner = make_runner(self.workdir)
-        recipe, _ = runner.prepare_devlop(path)
-        self.assertEqual(runner.devlop_env(recipe), {"DK_TEST": "recipe"})
+        prepare = getattr(runner, "prepare_develop", runner.prepare_devlop)
+        develop_env = getattr(runner, "develop_env", runner.devlop_env)
+        recipe, _ = prepare(path)
+        self.assertEqual(develop_env(recipe), {"DK_TEST": "recipe"})
 
     def test_area_replaces_recipe_env(self):
         path = write_recipe(self.tmp, {
@@ -151,11 +161,13 @@ class TestPrepare(DevlopTestCase):
             "area": [{"key": "B", "value": "2"}],
         })
         runner = make_runner(self.workdir)
-        recipe, _ = runner.prepare_devlop(path)
-        self.assertEqual(runner.devlop_env(recipe), {"B": "2"})
+        prepare = getattr(runner, "prepare_develop", runner.prepare_devlop)
+        develop_env = getattr(runner, "develop_env", runner.devlop_env)
+        recipe, _ = prepare(path)
+        self.assertEqual(develop_env(recipe), {"B": "2"})
 
 
-class TestShell(DevlopTestCase):
+class TestShell(DevelopTestCase):
     def test_default_cwd_is_workspace(self):
         shell = self.setup_shell({})
         self.assertEqual(shell.cwd, self.workdir.resolve())
@@ -259,7 +271,7 @@ class TestShell(DevlopTestCase):
         self.assertEqual((self.workdir / "out.txt").read_text(encoding="utf-8").strip(), "hi")
 
 
-class TestCli(DevlopTestCase):
+class TestCli(DevelopTestCase):
     def run_cli(self, argv: list[str]) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -273,24 +285,41 @@ class TestCli(DevlopTestCase):
         self.assertTrue(args.dry_run)
         self.assertFalse(hasattr(args, "job"))
 
-    def test_parser_builds_develop_alias(self):
+    def test_parser_builds_develop(self):
         args = build_parser().parse_args(["develop", "x.json", "--dry-run"])
         self.assertIn(args.command, {"devlop", "develop"})
         self.assertEqual(args.recipe, "x.json")
         self.assertTrue(args.dry_run)
         self.assertFalse(hasattr(args, "job"))
 
-    def test_help_lists_devlop(self):
+    def test_parser_builds_devlop_alias(self):
+        args = build_parser().parse_args(["devlop", "x.json", "--dry-run"])
+        self.assertIn(args.command, {"devlop", "develop"})
+        self.assertEqual(args.recipe, "x.json")
+        self.assertTrue(args.dry_run)
+        self.assertFalse(hasattr(args, "job"))
+
+    def test_help_lists_develop(self):
         out = io.StringIO()
         with self.assertRaises(SystemExit):
             with contextlib.redirect_stdout(out):
                 main(["--help"])
-        self.assertIn("devlop", out.getvalue())
-        self.assertIn("develop", out.getvalue())
-        self.assertIn("shell", out.getvalue())
+        text = out.getvalue()
+        self.assertIn("develop", text)
+        self.assertIn("devlop", text)
+        self.assertIn("shell", text)
 
-    def test_cli_dispatches_to_devlop(self):
-        with mock.patch("devkit.devlop.run_devlop", return_value=0) as run:
+    def test_cli_dispatches_to_develop(self):
+        with mock.patch("devkit.develop.run_develop", return_value=0) as run:
+            code, _, _ = self.run_cli([
+                "develop", "x.json", "-w", str(self.workdir),
+            ])
+        self.assertEqual(code, 0)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[1], "x.json")
+
+    def test_cli_dispatches_to_devlop_alias(self):
+        with mock.patch("devkit.develop.run_develop", return_value=0) as run:
             code, _, _ = self.run_cli([
                 "devlop", "x.json", "-w", str(self.workdir),
             ])
@@ -299,7 +328,7 @@ class TestCli(DevlopTestCase):
         self.assertEqual(run.call_args.args[1], "x.json")
 
     def test_cli_dispatches_to_shell(self):
-        with mock.patch("devkit.devlop.run_devlop", return_value=0) as run:
+        with mock.patch("devkit.develop.run_develop", return_value=0) as run:
             code, _, _ = self.run_cli([
                 "shell", "x.json", "-w", str(self.workdir),
             ])
@@ -310,40 +339,31 @@ class TestCli(DevlopTestCase):
     def test_shell_hides_info_logs(self):
         path = write_recipe(self.tmp, {})
         argv = ["-w", str(self.workdir)]
-        with mock.patch("devkit.devlop.DevlopShell.run"):
+        with mock.patch("devkit.develop.DevelopShell.run"):
             code, _, err = self.run_cli(["shell", str(path), *argv])
         self.assertEqual(code, 0)
         self.assertNotIn("配方", err)
         self.assertNotIn("INFO", err)
 
-    def test_cli_dispatches_to_develop(self):
-        with mock.patch("devkit.devlop.run_devlop", return_value=0) as run:
-            code, _, _ = self.run_cli([
-                "develop", "x.json", "-w", str(self.workdir),
-            ])
-        self.assertEqual(code, 0)
-        run.assert_called_once()
-        self.assertEqual(run.call_args.args[1], "x.json")
-
-    def test_devlop_shows_info_logs(self):
-        path = write_recipe(self.tmp, {})
-        argv = ["-w", str(self.workdir)]
-        with mock.patch("devkit.devlop.DevlopShell.run"):
-            code, _, err = self.run_cli(["devlop", str(path), *argv])
-        self.assertEqual(code, 0)
-        self.assertIn("配方", err)
-
     def test_develop_shows_info_logs(self):
         path = write_recipe(self.tmp, {})
         argv = ["-w", str(self.workdir)]
-        with mock.patch("devkit.devlop.DevlopShell.run"):
+        with mock.patch("devkit.develop.DevelopShell.run"):
             code, _, err = self.run_cli(["develop", str(path), *argv])
+        self.assertEqual(code, 0)
+        self.assertIn("配方", err)
+
+    def test_devlop_alias_shows_info_logs(self):
+        path = write_recipe(self.tmp, {})
+        argv = ["-w", str(self.workdir)]
+        with mock.patch("devkit.develop.DevelopShell.run"):
+            code, _, err = self.run_cli(["devlop", str(path), *argv])
         self.assertEqual(code, 0)
         self.assertIn("配方", err)
 
     def test_missing_recipe_returns_1_without_entering_terminal(self):
         code, _, err = self.run_cli([
-            "devlop", str(self.tmp / "absent.json"),
+            "develop", str(self.tmp / "absent.json"),
             "-w", str(self.workdir),
         ])
         self.assertEqual(code, 1)
@@ -356,6 +376,16 @@ class TestCli(DevlopTestCase):
         ])
         self.assertEqual(code, 1)
         self.assertIn("不存在", err)
+
+
+class TestCompatAlias(DevelopTestCase):
+    def test_devlop_module_reexports(self):
+        import devkit.devlop as devlop
+
+        self.assertIs(devlop.DevelopShell, DevelopShell)
+        self.assertIs(devlop.DevlopShell, DevelopShell)
+        self.assertIs(devlop.run_develop, develop.run_develop)
+        self.assertIs(devlop.run_devlop, develop.run_develop)
 
 
 if __name__ == "__main__":

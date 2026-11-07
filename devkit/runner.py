@@ -253,10 +253,10 @@ class RecipeRunner:
 
     # ----------------------------------------------------------------- 配方
 
-    def prepare_devlop(self, recipe_path: Path | str) -> tuple[Recipe, Path]:
+    def prepare_develop(self, recipe_path: Path | str) -> tuple[Recipe, Path]:
         """执行配方的非 jobs 部分（material/download/unzip/unpack）。
 
-        返回解析后的配方和工作区目录；终端本身由 ``devkit.devlop`` 负责。
+        返回解析后的配方和工作区目录；终端本身由 ``devkit.develop`` 负责。
         """
         path = resolve_recipe_path(recipe_path)
         recipe = load_recipe(path)
@@ -269,7 +269,9 @@ class RecipeRunner:
         self._run_unpacks(recipe)
         return recipe, cwd
 
-    def devlop_env(self, recipe: Recipe) -> dict[str, str]:
+    prepare_devlop = prepare_develop
+
+    def develop_env(self, recipe: Recipe) -> dict[str, str]:
         """只计算配方级（全局）环境；作业/步骤级环境不参与。"""
         effective = self._effective_expr(recipe)
         if recipe.area is not None:
@@ -278,7 +280,9 @@ class RecipeRunner:
         env = self._eval_env_entries(recipe.env, recipe, effective, "env")
         return self._merge_env({}, env)
 
-    def run_devlop_line(
+    devlop_env = develop_env
+
+    def run_develop_line(
         self,
         line: str,
         *,
@@ -286,11 +290,11 @@ class RecipeRunner:
         cwd: Path,
         env: dict[str, str] | None = None,
     ) -> None:
-        """执行 devlop 输入的一行命令，走与 run 步骤相同的执行路径。"""
+        """执行 develop 输入的一行命令，走与 run 步骤相同的执行路径。"""
         if env is None:
-            env = self.devlop_env(recipe)
-        step = Step(name="devlop", run=((line,),))
-        job = Job(name="devlop")
+            env = self.develop_env(recipe)
+        step = Step(name="develop", run=((line,),))
+        job = Job(name="develop")
         effective = self._effective_expr(recipe, job, step)
         if should_eval_expression(effective, "run"):
             line = str(substitute_in_value(line, self._get_expr_ns(recipe), True))
@@ -302,6 +306,8 @@ class RecipeRunner:
             env=dict(env) if env else None,
             announce=False,
         )
+
+    run_devlop_line = run_develop_line
 
     def _run_recipe(
         self,
