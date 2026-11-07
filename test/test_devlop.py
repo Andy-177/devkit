@@ -46,7 +46,7 @@ class DevlopTestCase(unittest.TestCase):
 class TestPrompt(DevlopTestCase):
     def test_prompt_contains_user_host_and_absolute_path(self):
         text = prompt_text(self.tmp, user="u", host="h")
-        self.assertEqual(text, f"devlop u@h {self.tmp.resolve()} $\n└─> ")
+        self.assertEqual(text, f"develop u@h {self.tmp.resolve()} $\n└─> ")
 
     def test_continuation_prompt(self):
         self.assertEqual(devlop.CONTINUATION, " ╰> ")
@@ -103,7 +103,7 @@ class TestColor(DevlopTestCase):
         fragments = devlop.prompt_fragments(
             self.tmp, user="u", host="h", colors=CHERRY
         )
-        self.assertIn(("fg:#e09bff", "devlop"), fragments)
+        self.assertIn(("fg:#e09bff", "develop"), fragments)
         self.assertIn(("fg:#8a52bc", "u@h"), fragments)
         self.assertIn(("fg:#6b73ad", str(self.tmp.resolve())), fragments)
         self.assertIn(("fg:#cc87eb", "$"), fragments)
@@ -273,12 +273,20 @@ class TestCli(DevlopTestCase):
         self.assertTrue(args.dry_run)
         self.assertFalse(hasattr(args, "job"))
 
+    def test_parser_builds_develop_alias(self):
+        args = build_parser().parse_args(["develop", "x.json", "--dry-run"])
+        self.assertIn(args.command, {"devlop", "develop"})
+        self.assertEqual(args.recipe, "x.json")
+        self.assertTrue(args.dry_run)
+        self.assertFalse(hasattr(args, "job"))
+
     def test_help_lists_devlop(self):
         out = io.StringIO()
         with self.assertRaises(SystemExit):
             with contextlib.redirect_stdout(out):
                 main(["--help"])
         self.assertIn("devlop", out.getvalue())
+        self.assertIn("develop", out.getvalue())
         self.assertIn("shell", out.getvalue())
 
     def test_cli_dispatches_to_devlop(self):
@@ -308,11 +316,28 @@ class TestCli(DevlopTestCase):
         self.assertNotIn("配方", err)
         self.assertNotIn("INFO", err)
 
+    def test_cli_dispatches_to_develop(self):
+        with mock.patch("devkit.devlop.run_devlop", return_value=0) as run:
+            code, _, _ = self.run_cli([
+                "develop", "x.json", "-w", str(self.workdir),
+            ])
+        self.assertEqual(code, 0)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[1], "x.json")
+
     def test_devlop_shows_info_logs(self):
         path = write_recipe(self.tmp, {})
         argv = ["-w", str(self.workdir)]
         with mock.patch("devkit.devlop.DevlopShell.run"):
             code, _, err = self.run_cli(["devlop", str(path), *argv])
+        self.assertEqual(code, 0)
+        self.assertIn("配方", err)
+
+    def test_develop_shows_info_logs(self):
+        path = write_recipe(self.tmp, {})
+        argv = ["-w", str(self.workdir)]
+        with mock.patch("devkit.devlop.DevlopShell.run"):
+            code, _, err = self.run_cli(["develop", str(path), *argv])
         self.assertEqual(code, 0)
         self.assertIn("配方", err)
 

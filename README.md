@@ -22,6 +22,7 @@
 devkit build recipe.json                # 执行配方
 devkit run recipe.json                  # build 的别名，完全等价
 devkit devlop recipe.json               # 执行非 jobs 部分后进入交互终端
+devkit develop recipe.json              # devlop 的别名，效果完全一致
 devkit shell recipe.json                # devlop 的别名，但不显示日志
 devkit build bon/recipe.json -w build   # 指定工作区
 devkit build recipe.json -j build-windows --dry-run
@@ -204,11 +205,11 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 `run` 相同的执行路径运行，因此继承配方级 `env`/`area`，但不会继承作业级、步骤级
 环境。`cd`/`chdir`、`exit`/`quit`/`logout` 是终端内建命令。
 
-`devkit shell recipe.json` 是 devlop 的别名，行为完全一致，只是隐藏 INFO/DEBUG
-日志，界面更简洁；错误仍会显示。
+`devkit develop recipe.json` 是 devlop 的别名，效果完全一致。`devkit shell recipe.json`
+也是 devlop 的别名，行为完全一致，只是隐藏 INFO/DEBUG 日志，界面更简洁；错误仍会显示。
 
 ```text
-devlop 用户名@PC名 完整所在路径 $
+develop 用户名@PC名 完整所在路径 $
 └─> 
 ```
 
@@ -217,8 +218,8 @@ devlop 用户名@PC名 完整所在路径 $
 相同，但没有 `-j/--job`。
 
 提示符颜色由 `devkit/_color.py` 的 `devlop_shell_color()` 决定，返回一个 6 元组，
-依次对应 `(devlop, 用户名@主机名, 路径, $, └─>, ╰>)`。无法调用或格式不正确时
-使用全白色；修改后重新进入 devlop 生效。
+依次对应 `(develop, 用户名@主机名, 路径, $, └─>, ╰>)`。无法调用或格式不正确时
+使用全白色；修改后重新进入 develop/devlop 生效。
 
 ### 表达式 `?!{{...}}`
 

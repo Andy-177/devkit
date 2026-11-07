@@ -1,10 +1,10 @@
-"""devlop 终端配色（用户可修改）。
+"""develop/devlop 终端配色（用户可修改）。
 
 ``devlop_shell_color()`` 必须返回 6 个颜色字符串组成的元组，依次对应：
 
-``(devlop, 用户名@主机名, 路径, $, └─>, ╰>)``
+``(develop, 用户名@主机名, 路径, $, └─>, ╰>)``
 
-无法调用或返回格式不正确时，devlop 使用全白色。
+无法调用或返回格式不正确时，终端使用全白色。
 """
 
 from __future__ import annotations

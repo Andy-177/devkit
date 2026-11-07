@@ -5,6 +5,7 @@
     devkit build recipe.json               # 执行配方
     devkit run recipe.json                 # build 的别名，等价
     devkit devlop recipe.json              # 执行非 jobs 部分后进入交互终端
+    devkit develop recipe.json             # devlop 的别名，效果完全一致
     devkit shell recipe.json               # devlop 的别名，但不显示日志
     devkit build bon/recipe.json -w build  # 指定工作目录
     devkit build recipe.json -j build-windows --dry-run
@@ -71,7 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_arguments(build)
 
     devlop = subparsers.add_parser(
-        "devlop", help="执行配方的非 jobs 部分，然后进入 devkit 交互终端"
+        "devlop",
+        aliases=["develop"],
+        help="执行配方的非 jobs 部分，然后进入 devkit 交互终端（develop 是别名）",
     )
     _add_recipe_arguments(devlop, with_job=False)
 
@@ -131,6 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "build",
         "run",
         "devlop",
+        "develop",
         "shell",
         "system",
         "-h",
@@ -193,7 +197,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         code.interact(banner=banner, local=ns)
         return 0
 
-    if args.command in {"devlop", "shell"}:
+    if args.command in {"devlop", "develop", "shell"}:
         from devkit.devlop import run_devlop
 
         try:

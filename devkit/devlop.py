@@ -62,11 +62,11 @@ def prompt_fragments(
     host: str | None = None,
     colors: tuple[str, ...] | None = None,
 ) -> list[tuple[str, str]]:
-    """按 ``(devlop, user@host, path, $, └─>, ╰>)`` 顺序给主提示符上色。"""
+    """按 ``(develop, user@host, path, $, └─>, ╰>)`` 顺序给主提示符上色。"""
     colors = colors or load_shell_colors()
     path = Path(cwd).expanduser().resolve()
     return [
-        (f"fg:{colors[0]}", "devlop"),
+        (f"fg:{colors[0]}", "develop"),
         ("", " "),
         (f"fg:{colors[1]}", f"{user or _username()}@{host or _hostname()}"),
         ("", " "),
@@ -102,9 +102,9 @@ def _hostname() -> str:
 
 
 def prompt_text(cwd: Path | str, *, user: str | None = None, host: str | None = None) -> str:
-    """生成两行主提示符：``devlop user@host 绝对路径 $`` / ``└─> ``。"""
+    """生成两行主提示符：``develop user@host 绝对路径 $`` / ``└─> ``。"""
     path = Path(cwd).expanduser().resolve()
-    return f"devlop {user or _username()}@{host or _hostname()} {path} $\n└─> "
+    return f"develop {user or _username()}@{host or _hostname()} {path} $\n└─> "
 
 
 def join_input_lines(text: str) -> str:
