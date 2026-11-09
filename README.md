@@ -93,8 +93,9 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 
 ## 配方格式
 
-顶层字段全部可选，固定执行顺序：`material` 克隆 -> `download`（按列表顺序）
--> `unzip`（按列表顺序）-> `unpack`（按列表顺序）-> `jobs`（按声明顺序）。
+顶层字段全部可选，固定执行顺序：`material` 克隆 -> `fetch`（按列表顺序，下载到配方目录）
+-> `download`（按列表顺序，下载到工作区）-> `unzip`（按列表顺序）-> `unpack`（按列表顺序，
+下载/解压到工作区）-> `pull`（按列表顺序，缓存/解压到配方目录）-> `jobs`（按声明顺序）。
 
 ```json
 {
@@ -104,6 +105,10 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
     "depth": 1,
     "commit": null
   },
+  "fetch": [
+    "https://example.com/recipe-asset.zip",
+    {"url": "https://example.com/win.bin", "system": "win_amd64"}
+  ],
   "download": [
     "https://example.com/tool.zip",
     {"url": "https://example.com/win.exe", "system": "win_amd64"},
@@ -116,6 +121,10 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
   "unpack": [
     "https://example.com/bundle.zip",
     {"url": "https://example.com/win-tools.zip", "system": "win_amd64", "extract": true}
+  ],
+  "pull": [
+    "https://example.com/recipe-bundle.zip",
+    {"url": "https://example.com/win-tools.zip", "system": "win_amd64", "extract": false}
   ],
   "env": [
     {"key": "hello", "value": "world"},
@@ -142,27 +151,34 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 }
 ```
 
-### material / download / unzip / unpack
+### material / fetch / download / unzip / unpack / pull
 
 * `material`：一个 git 仓库；`repo` 必填。`branch` 空 -> 默认分支，`depth` 0/null
   -> 完整历史，`commit` 存在则克隆后检出。克隆先落临时目录，成功才改名，
   失败不留半成品；目标已是 git 仓库则跳过（方便重复执行）。
-* `download` / `unzip` / `unpack`：语法统一，每一项是字符串简写或对象：
+* `fetch` / `download` / `unzip` / `unpack` / `pull`：语法统一，每一项是字符串简写或对象：
 
   ```json
+  "fetch":    ["https://a/b.bin", {"url": "https://a/c.bin", "system": "win_amd64"}],
   "download": ["https://a/b.zip", {"url": "https://a/c.exe", "system": "win_amd64"}],
   "unzip":    ["a.zip", {"file": "b.zip", "system": "win_amd64", "extract": true}],
-  "unpack":   ["https://a/b.zip", {"url": "https://a/c.zip", "system": "win_amd64", "extract": true}]
+  "unpack":   ["https://a/b.zip", {"url": "https://a/c.zip", "system": "win_amd64", "extract": true}],
+  "pull":     ["https://a/b.zip", {"url": "https://a/c.zip", "system": "win_amd64", "extract": false}]
   ```
 
-  * 键：`download`/`unpack` 用网络链接 `url`，`unzip` 用本地文件 `file`；
+  * 键：`fetch`/`download`/`unpack`/`pull` 用网络链接 `url`，`unzip` 用本地文件 `file`；
   * `system`（可选）：单个字符串或列表，缺省对所有系统生效；
-  * `extract`（可选，缺省 `false`，仅 `unzip`/`unpack`）：`true` 时把压缩包里的内容
-    直接铺到下载目录，否则先在下载目录下建一个与压缩包同名的子目录再解压进去；
-  * `download` 是纯下载，只有 `url` 和 `system`，没有 `extract`；下载文件统一落在工作区目录；
+  * `extract`（可选，仅 `unzip`/`unpack`/`pull`）：
+    * `unzip`、`unpack` 的 `extract` 缺省为 `false`：先在目标目录下建一个与压缩包同名的子目录再解压进去；
+    * `pull` 的 `extract` 缺省为 `true`：把压缩包里的内容直接铺到目标目录；显式写 `extract: false` 时改为先套同名子目录；
+    * `extract: true` 时都直接铺到目标目录；
+  * `fetch` 的行为与 `download` 完全一致（纯下载，只有 `url` 和 `system`，没有 `extract`），但下载的文件放在**配方所在目录**；
+  * `download` 是纯下载，只有 `url` 和 `system`，没有 `extract`；下载文件统一落在工作区目录（`--workdir`，默认 `.devkit`）；
+  * `pull` 的行为与 `unpack` 完全一致（下载并解压），但 `.dkcache` 缓存与解压结果都放在**配方所在目录**，且 `extract` 默认值为 `true`；
   * `unzip` 的本地 zip 按 "配方目录 -> 克隆的 workspace -> 工作区" 顺序查找；`unpack`
-    先把 zip 下载到 `<工作区>/.dkcache` 缓存，再解压释放；
-  * 两者都解压到工作区目录（默认 `.devkit`），含 zip-slip 防护。
+    先把 zip 下载到 `<工作区>/.dkcache` 缓存，再解压释放到工作区目录；
+  * `pull` 先把 zip 下载到 `<配方目录>/.dkcache` 缓存，再解压释放到配方目录；
+  * 解压均含 zip-slip 防护。
 
 ### env / area 环境块（可选）
 
@@ -200,8 +216,8 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 
 ### develop / shell 交互终端
 
-`devkit develop recipe.json` 先执行配方的非 `jobs` 部分（`material`/`download`/
-`unzip`/`unpack`），然后进入交互终端。终端默认工作目录是 `--workdir`；命令通过与
+`devkit develop recipe.json` 先执行配方的非 `jobs` 部分（`material`/`fetch`/`download`/
+`unzip`/`unpack`/`pull`），然后进入交互终端。终端默认工作目录是 `--workdir`；命令通过与
 `run` 相同的执行路径运行，因此继承配方级 `env`/`area`，但不会继承作业级、步骤级
 环境。`cd`/`chdir`、`exit`/`quit`/`logout` 是终端内建命令。
 
@@ -257,7 +273,7 @@ develop 用户名@PC名 完整所在路径 $
 
 `expression` 可写在全局、作业、步骤三处，按就近原则覆盖：`true` 开启全部，
 `["run", "env", ...]` 是功能/字段白名单，`false` 关闭（可关闭上层开启的表达式）。
-可用功能名：`material`（别名 `clone`）、`download`、`unzip`、`unpack`、`env`、
+可用功能名：`material`（别名 `clone`）、`fetch`、`download`、`unzip`、`unpack`、`pull`、`env`、
 `area`、`data`、`system`、`run`、`call`。默认关闭。`system` 也可用于作业/步骤/
 环境项/下载项的 `system` 过滤（如 `"system": "?!{{get_system_info()}}"`）。
 
@@ -358,12 +374,12 @@ develop 用户名@PC名 完整所在路径 $
 ```text
 devkit/
   cli.py        命令行入口（python devkit/cli.py 直接可跑）
-  runner.py     执行引擎: 克隆 -> 下载 -> 解压 -> 下载解压 -> 工作流
+  runner.py     执行引擎: 克隆 -> fetch/download -> 解压 -> unpack/pull -> 工作流
   recipe.py     配方解析与校验
   git.py        material 克隆（dulwich）
   dl.py         下载（littledl）
   unzip.py      本地 zip 解压（zipfile，含 zip-slip 防护）
-  unpack.py     下载并解压（download + unzip，缓存到 .dkcache）
+  unpack.py     下载并解压（download + unzip，unpack/pull 共用，缓存到 .dkcache）
   guard.py      并发运行的 stdin 守卫
   progress.py   单行进度条（纯标准库）
   system.py     系统标识检测（<os>_<arch>）
@@ -372,7 +388,7 @@ devkit/
 dkpymodule/    可选壳工程: pyproject/setup.py/sync.py + src/devkit（同步生成）
 example/       示例配方: recipe.json + hello.json
 requirements.txt 运行依赖（pyinstaller 不在此列，打包时单独装）
-test/           全套单元/集成/端到端测试（221 个）
+test/           全套单元/集成/端到端测试
 ```
 
 ## 测试

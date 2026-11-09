@@ -82,8 +82,9 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
 因此 ``[["echo a"]]``、``[["echo", 0, ">", "out.txt"]]`` 走 shell；而
 ``[["C:/Python/python.exe", "-c", 0]]``、``[["tool.exe", "-v"]]`` 直接启动。
 
-执行顺序是固定的，没有集中式编排：``material`` 克隆 -> ``download``（按列表顺序）
--> ``unzip``（按列表顺序）-> ``unpack``（按列表顺序）-> ``jobs``（按声明顺序）。编排的权利下放到步骤里，
+执行顺序是固定的，没有集中式编排：``material`` 克隆 -> ``fetch``（按列表顺序，下载到配方目录）
+-> ``download``（按列表顺序，下载到工作区）-> ``unzip``（按列表顺序）-> ``unpack``（按列表顺序，解压到工作区）
+-> ``pull``（按列表顺序，缓存/解压到配方目录）-> ``jobs``（按声明顺序）。编排的权利下放到步骤里，
 步骤的控制字段（全部可选）::
 
     "init": {
@@ -182,9 +183,9 @@ data 里出现整数时，含义取决于配方如何被使用：
 
 ``expression`` 字段可写在顶层、作业、步骤三处（默认关闭），打开后任意字符串里
 的 ``?!{{python_expression}}`` 会在运行时求值（完整 builtins，另含
-``get_recipe_path()`` / ``get_system_info()``）。``true`` 开启全部，字符串列表是
-功能/字段白名单（``material``/``clone``、``download``、``unzip``、``unpack``、
-``env``、``area``、``data``、``system``、``run``、``call``），``false`` 关闭并
+``get_recipe_path()`` / ``get_system_info()`` 等）。``true`` 开启全部，字符串列表是
+功能/字段白名单（``material``/``clone``、``fetch``、``download``、``unzip``、``unpack``、
+``pull``、``env``、``area``、``data``、``system``、``run``、``call``），``false`` 关闭并
 覆盖上层。求值失败会强制终止整个工作流，不受 ``errskip`` 影响。
 """
 
@@ -223,7 +224,7 @@ DEFAULT_STEP_ERRSKIP = STEP_ERR_STOP
 #: 作业 errskip 缺省: 终止出错的作业，联动的作业跑完再继续下一个作业
 DEFAULT_JOB_ERRSKIP = JOB_ERR_PROCEED
 
-_KNOWN_TOP_KEYS = {"material", "download", "unzip", "unpack", "env", "area", "data", "jobs", "expression"}
+_KNOWN_TOP_KEYS = {"material", "fetch", "download", "unzip", "unpack", "pull", "env", "area", "data", "jobs", "expression"}
 _KNOWN_MATERIAL_KEYS = {"repo", "branch", "depth", "commit"}
 _KNOWN_JOB_KEYS = {"system", "env", "area", "steps", "skip", "linkup", "errskip", "expression"}
 _KNOWN_STEP_KEYS = {
@@ -266,6 +267,17 @@ class DownloadSpec:
 
 
 @dataclass(frozen=True)
+class FetchSpec:
+    """与 :class:`DownloadSpec` 行为一致，但下载到配方所在目录。"""
+
+    url: str
+    systems: tuple[str, ...] | None = None
+
+    def matches(self, system: str) -> bool:
+        return self.systems is None or system in self.systems
+
+
+@dataclass(frozen=True)
 class UnzipSpec:
     """一个解压项: 一个本地 zip 文件，可带系统过滤与 extract 选项。
 
@@ -292,6 +304,21 @@ class UnpackSpec:
     url: str
     systems: tuple[str, ...] | None = None
     extract: bool = False
+
+    def matches(self, system: str) -> bool:
+        return self.systems is None or system in self.systems
+
+
+@dataclass(frozen=True)
+class PullSpec:
+    """与 :class:`UnpackSpec` 行为一致，但缓存与解压都在配方所在目录。
+
+    与 ``unpack`` 不同，``pull`` 的 ``extract`` 默认值为 ``True``。
+    """
+
+    url: str
+    systems: tuple[str, ...] | None = None
+    extract: bool = True
 
     def matches(self, system: str) -> bool:
         return self.systems is None or system in self.systems
@@ -371,9 +398,11 @@ class Recipe:
 
     path: Path
     material: Material | None = None
+    fetches: tuple[FetchSpec, ...] = ()
     downloads: tuple[DownloadSpec, ...] = ()
     unzips: tuple[UnzipSpec, ...] = ()
     unpacks: tuple[UnpackSpec, ...] = ()
+    pulls: tuple[PullSpec, ...] = ()
     env: tuple[EnvEntry, ...] = ()
     area: tuple[EnvEntry, ...] | None = None
     data: tuple[Any, ...] = ()
@@ -535,18 +564,25 @@ def _parse_env_block(raw: Any, where: str) -> tuple[EnvEntry, ...] | None:
 
 
 def _parse_spec_list(
-    raw: Any, where: str, make, url_key: str, what: str, *, allow_extract: bool = True
+    raw: Any,
+    where: str,
+    make,
+    url_key: str,
+    what: str,
+    *,
+    allow_extract: bool = True,
+    default_extract: bool = False,
 ) -> tuple:
-    """解析 download/unpack/unzip 这类"列表 + 对象项"的字段。
+    """解析 download/fetch/unpack/pull/unzip 这类"列表 + 对象项"的字段。
 
     每一项要么是字符串（简写，等价于只填了 url/file 的对象），要么是对象::
 
-        {"url": "https://...", "system": "win_amd64"}                    # download
-        {"url": "https://...", "system": "win_amd64", "extract": true}   # unpack
+        {"url": "https://...", "system": "win_amd64"}                    # download/fetch
+        {"url": "https://...", "system": "win_amd64", "extract": true}   # unpack/pull
         {"file": "tool.zip",   "system": "win_amd64", "extract": true}   # unzip
 
     ``system`` 缺省表示所有系统都执行，可给字符串或字符串列表；
-    ``extract`` 仅在 ``allow_extract`` 为真时可用，缺省 False（先建同名子目录再解压）。
+    ``extract`` 仅在 ``allow_extract`` 为真时可用，缺省由 ``default_extract`` 决定。
     """
     if raw is None:
         return ()
@@ -559,7 +595,10 @@ def _parse_spec_list(
         if isinstance(item, str):
             if not item:
                 raise RecipeError(f"{item_where} {what}不能为空")
-            specs.append(make(item, None))
+            if allow_extract:
+                specs.append(make(item, None, default_extract))
+            else:
+                specs.append(make(item, None))
             continue
         if not isinstance(item, dict):
             hint = f'{{"{url_key}": ..., "system": ...}}'
@@ -576,7 +615,8 @@ def _parse_spec_list(
             raise RecipeError(f"{item_where}.{url_key} 必填且必须是字符串")
         systems = _parse_system_filter(item.get("system"), f"{item_where}.system")
         if allow_extract:
-            extract = _parse_bool(item.get("extract"), f"{item_where}.extract")
+            raw_extract = item.get("extract")
+            extract = default_extract if raw_extract is None else _parse_bool(raw_extract, f"{item_where}.extract")
             specs.append(make(value, systems, extract))
         else:
             specs.append(make(value, systems))
@@ -591,12 +631,24 @@ def _parse_download(raw: Any, where: str) -> tuple[DownloadSpec, ...]:
     return _parse_spec_list(raw, where, DownloadSpec, "url", "下载链接", allow_extract=False)
 
 
+def _parse_fetch(raw: Any, where: str) -> tuple[FetchSpec, ...]:
+    """fetch 与 download 语法一致，但下载到配方所在目录。"""
+    return _parse_spec_list(raw, where, FetchSpec, "url", "下载链接", allow_extract=False)
+
+
 def _parse_unzip(raw: Any, where: str) -> tuple[UnzipSpec, ...]:
     return _parse_spec_list(raw, where, UnzipSpec, "file", "zip 文件")
 
 
 def _parse_unpack(raw: Any, where: str) -> tuple[UnpackSpec, ...]:
     return _parse_spec_list(raw, where, UnpackSpec, "url", "zip 链接")
+
+
+def _parse_pull(raw: Any, where: str) -> tuple[PullSpec, ...]:
+    """pull 与 unpack 语法一致，但缓存/解压到配方目录，且 extract 默认 true。"""
+    return _parse_spec_list(
+        raw, where, PullSpec, "url", "zip 链接", allow_extract=True, default_extract=True
+    )
 
 
 def _run_scalar(value: Any) -> bool:
@@ -822,9 +874,11 @@ def _parse_recipe(path: Path, raw: dict) -> Recipe:
     return Recipe(
         path=path,
         material=_parse_material(raw.get("material"), "material"),
+        fetches=_parse_fetch(raw.get("fetch"), "fetch"),
         downloads=_parse_download(raw.get("download"), "download"),
         unzips=_parse_unzip(raw.get("unzip"), "unzip"),
         unpacks=_parse_unpack(raw.get("unpack"), "unpack"),
+        pulls=_parse_pull(raw.get("pull"), "pull"),
         env=_parse_env_block(raw.get("env"), "env") or (),
         area=_parse_env_block(raw.get("area"), "area"),
         data=tuple(raw.get("data") or ()),

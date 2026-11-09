@@ -9,7 +9,7 @@ from loguru import logger
 
 from devkit.errors import DownloadError
 from devkit.progress import ProgressBar, format_size
-from devkit.recipe import DownloadSpec
+from devkit.recipe import DownloadSpec, FetchSpec
 
 
 def filename_for(url: str) -> str:
@@ -19,7 +19,7 @@ def filename_for(url: str) -> str:
 
 
 def download_one(
-    spec: DownloadSpec,
+    spec: DownloadSpec | FetchSpec,
     dest: Path,
     system: str,
     *,

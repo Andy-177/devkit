@@ -1,9 +1,12 @@
-"""配方执行引擎: material 克隆 -> download 下载 -> jobs 工作流。
+"""配方执行引擎: material -> fetch/download/unzip/unpack/pull -> jobs 工作流。
 
 工作目录约定:
 
 * ``--workdir``（默认 ``./.devkit``）是配方的工作区，``run`` 里的指令在这里
-  执行。下载、解压也统一落到这个工作区；
+  执行。``download``、``unzip``、``unpack`` 默认都落到这个工作区；
+* ``fetch`` 与 ``download`` 行为一致，但下载到配方所在目录；
+* ``pull`` 与 ``unpack`` 行为一致，但 ``.dkcache`` 与解压结果都在配方所在目录，
+  且 ``extract`` 默认值为 ``true``；
 * 顶层配方若自带 material，克隆结果落在工作区下的 ``workspace`` 子目录；
   被 ``call`` 的配方若自带 material，则在父工作区下用配方文件名（去掉扩展名）
   开一个子目录，克隆结果落在该子目录的 ``workspace`` 里，避免互相覆盖；没有
@@ -13,8 +16,9 @@
 
 执行顺序与步骤控制:
 
-* 固定顺序: ``material`` 克隆 -> ``download``（按列表顺序）-> ``unzip``（按列表顺序）
-  -> ``unpack``（按列表顺序）-> ``jobs``（按声明顺序逐个执行），没有集中式编排；
+* 固定顺序: ``material`` 克隆 -> ``fetch``（按列表顺序）-> ``download``（按列表顺序）
+  -> ``unzip``（按列表顺序）-> ``unpack``（按列表顺序）-> ``pull``（按列表顺序）
+  -> ``jobs``（按声明顺序逐个执行），没有集中式编排；
 * 步骤默认按声明顺序执行，控制字段（``skip``/``errskip``/``linkup``/``jump``/``next``/
   ``if``）的语义见 ``devkit.recipe`` 的说明；失败等级 ``errskip``（``crash``/``stop``/
   ``proceed``/``skip``，缺省 ``stop``）决定失败的爆炸半径；
@@ -254,7 +258,7 @@ class RecipeRunner:
     # ----------------------------------------------------------------- 配方
 
     def prepare_develop(self, recipe_path: Path | str) -> tuple[Recipe, Path]:
-        """执行配方的非 jobs 部分（material/download/unzip/unpack）。
+        """执行配方的非 jobs 部分（material/fetch/download/unzip/unpack/pull）。
 
         返回解析后的配方和工作区目录；终端本身由 ``devkit.develop`` 负责。
         """
@@ -264,9 +268,11 @@ class RecipeRunner:
         cwd = self._prepare(recipe, workdir=self.workdir, top=True)
         if recipe.material is not None:
             self._clone(recipe, cwd)
+        self._run_fetches(recipe)
         self._run_downloads(recipe)
         self._run_unzips(recipe, cwd)
         self._run_unpacks(recipe)
+        self._run_pulls(recipe)
         return recipe, cwd
 
     prepare_devlop = prepare_develop
@@ -354,12 +360,14 @@ class RecipeRunner:
         top: bool,
         env: dict[str, str] | None = None,
     ) -> None:
-        """固定顺序: 克隆 -> 下载 -> 解压 -> 下载解压 -> 工作流。"""
+        """固定顺序: 克隆 -> fetch -> 下载 -> 解压 -> 下载解压 -> pull -> 工作流。"""
         if recipe.material is not None:
             self._clone(recipe, cwd)
+        self._run_fetches(recipe)
         self._run_downloads(recipe)
         self._run_unzips(recipe, cwd)
         self._run_unpacks(recipe)
+        self._run_pulls(recipe)
         self._run_jobs(recipe, data=data, cwd=cwd, stack=stack, top=top, env=env)
 
     def _clone(self, recipe: Recipe, cwd: Path) -> None:
@@ -388,7 +396,7 @@ class RecipeRunner:
         ensure_clone(material, target)
 
     def _eval_specs(self, specs, recipe: Recipe, feature: str, field: str):
-        """替换 download/unzip/unpack 项的 url/file 与 system 过滤。"""
+        """替换 fetch/download/unzip/unpack/pull 项的 url/file 与 system 过滤。"""
         effective = self._effective_expr(recipe)
         eval_value = should_eval_expression(effective, feature)
         eval_system = should_eval_expression(effective, "system")
@@ -410,6 +418,11 @@ class RecipeRunner:
             result.append(replace(spec, **{field: value, "systems": systems}))
         return tuple(result)
 
+    def _run_fetches(self, recipe: Recipe) -> None:
+        specs = self._eval_specs(recipe.fetches, recipe, "fetch", "url")
+        for spec in specs:
+            download_one(spec, recipe.dir, self.system, dry_run=self.dry_run)
+
     def _run_downloads(self, recipe: Recipe) -> None:
         specs = self._eval_specs(recipe.downloads, recipe, "download", "url")
         for spec in specs:
@@ -425,6 +438,11 @@ class RecipeRunner:
         specs = self._eval_specs(recipe.unpacks, recipe, "unpack", "url")
         for spec in specs:
             unpack_one(spec, self.download_dir, self.system, dry_run=self.dry_run)
+
+    def _run_pulls(self, recipe: Recipe) -> None:
+        specs = self._eval_specs(recipe.pulls, recipe, "pull", "url")
+        for spec in specs:
+            unpack_one(spec, recipe.dir, self.system, dry_run=self.dry_run)
 
     # ------------------------------------------------------------------ job
 

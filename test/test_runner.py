@@ -542,6 +542,103 @@ class TestDownloadUnzipInRecipe(RunnerTestCase):
         dl = self.workdir
         self.assertTrue((dl / "bundle" / "inner.txt").exists())
 
+    def test_fetch_downloads_to_recipe_dir(self):
+        source = self.tmp / "payload.bin"
+        source.write_bytes(b"abc")
+
+        def fake_download(spec, dest, system, *, dry_run=False):
+            dest.mkdir(parents=True, exist_ok=True)
+            target = dest / "payload.bin"
+            target.write_bytes(source.read_bytes())
+            return target
+
+        path = write_recipe(self.tmp, {
+            "fetch": ["https://example.com/payload.bin"],
+            "jobs": {"main": {"steps": {"s": {"run": [echo_write("done.txt")]}}}},
+        })
+        with mock.patch("devkit.runner.download_one", side_effect=fake_download):
+            runner = run_recipe(path, self.workdir)
+        self.assertFalse(runner.failed)
+        self.assertTrue((self.tmp / "payload.bin").exists())
+        self.assertFalse((self.workdir / "payload.bin").exists())
+
+    def test_pull_defaults_to_extract_and_uses_recipe_dir_cache(self):
+        import zipfile
+
+        source = self.tmp / "bundle.zip"
+        with zipfile.ZipFile(source, "w") as zf:
+            zf.writestr("inner.txt", "payload")
+
+        def fake_download(spec, dest, system, *, dry_run=False):
+            dest.mkdir(parents=True, exist_ok=True)
+            target = dest / "bundle.zip"
+            target.write_bytes(source.read_bytes())
+            return target
+
+        path = write_recipe(self.tmp, {
+            "pull": ["https://example.com/bundle.zip"],
+            "jobs": {"main": {"steps": {"s": {"run": [echo_write("done.txt")]}}}},
+        })
+        with mock.patch("devkit.unpack.download_one", side_effect=fake_download):
+            runner = run_recipe(path, self.workdir)
+        self.assertFalse(runner.failed)
+        self.assertTrue((self.tmp / ".dkcache" / "bundle.zip").exists())
+        self.assertTrue((self.tmp / "inner.txt").exists())
+        self.assertFalse((self.workdir / ".dkcache").exists())
+        self.assertFalse((self.workdir / "bundle").exists())
+
+    def test_pull_extract_false_nests_in_recipe_dir(self):
+        import zipfile
+
+        source = self.tmp / "bundle.zip"
+        with zipfile.ZipFile(source, "w") as zf:
+            zf.writestr("inner.txt", "payload")
+
+        def fake_download(spec, dest, system, *, dry_run=False):
+            dest.mkdir(parents=True, exist_ok=True)
+            target = dest / "bundle.zip"
+            target.write_bytes(source.read_bytes())
+            return target
+
+        path = write_recipe(self.tmp, {
+            "pull": [{"url": "https://example.com/bundle.zip", "extract": False}],
+            "jobs": {"main": {"steps": {"s": {"run": [echo_write("done.txt")]}}}},
+        })
+        with mock.patch("devkit.unpack.download_one", side_effect=fake_download):
+            run_recipe(path, self.workdir)
+        self.assertTrue((self.tmp / "bundle" / "inner.txt").exists())
+
+    def test_fetch_and_pull_support_expression_features(self):
+        import zipfile
+
+        source = self.tmp / "bundle.zip"
+        with zipfile.ZipFile(source, "w") as zf:
+            zf.writestr("inner.txt", "payload")
+        fetched = self.tmp / "f.bin"
+        fetched.write_bytes(b"f")
+
+        def fake_dl(spec, dest, system, *, dry_run=False):
+            dest.mkdir(parents=True, exist_ok=True)
+            name = "f.bin" if spec.url.endswith("f.bin") else "bundle.zip"
+            src = fetched if name == "f.bin" else source
+            target = dest / name
+            target.write_bytes(src.read_bytes())
+            return target
+
+        path = write_recipe(self.tmp, {
+            "expression": ["fetch", "pull"],
+            "fetch": ["?!{{'https://example.com/f.bin'}}"],
+            "pull": [{"url": "?!{{'https://example.com/bundle.zip'}}", "extract": True}],
+            "jobs": {"main": {"steps": {"s": {"run": [echo_write("done.txt")]}}}},
+        })
+        with mock.patch("devkit.runner.download_one", side_effect=fake_dl), \
+                mock.patch("devkit.unpack.download_one", side_effect=fake_dl):
+            runner = run_recipe(path, self.workdir)
+        self.assertFalse(runner.failed)
+        self.assertTrue((self.tmp / "f.bin").exists())
+        self.assertTrue((self.tmp / ".dkcache" / "bundle.zip").exists())
+        self.assertTrue((self.tmp / "inner.txt").exists())
+
 
 class TestSpawnInternals(RunnerTestCase):
     def test_string_command_uses_shell(self):

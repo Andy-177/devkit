@@ -1,10 +1,11 @@
-"""配方 unpack 段的"下载并解压"，是 download 和 unzip 的结合体。
+"""配方 unpack/pull 段的"下载并解压"，是 download 和 unzip 的结合体。
 
-zip 从网络下载到 ``<下载目录>/.dkcache`` 缓存，再解压释放到下载目录
-（默认 ``.devkit``）：
+zip 从网络下载到 ``<目标目录>/.dkcache`` 缓存，再解压释放到目标目录：
 
-* ``extract:true`` 时把压缩包里的内容直接铺到下载目录；
-* 否则先在下载目录下建一个与压缩包同名的子目录，再解压进去。
+* ``unpack`` 默认目标是工作区（``.devkit``），``extract`` 默认 ``false``；
+* ``pull`` 默认目标是配方所在目录，``extract`` 默认 ``true``；
+* ``extract:true`` 时把压缩包里的内容直接铺到目标目录；
+* 否则先在目标目录下建一个与压缩包同名的子目录，再解压进去。
 """
 
 from __future__ import annotations
@@ -14,15 +15,15 @@ from pathlib import Path
 from loguru import logger
 
 from devkit.dl import download_one
-from devkit.recipe import DownloadSpec, UnpackSpec
+from devkit.recipe import DownloadSpec, PullSpec, UnpackSpec
 from devkit.unzip import _unzip_to, extract_root
 
-#: 下载的压缩包缓存在下载目录下的这个子目录
+#: 下载的压缩包缓存在目标目录下的这个子目录
 _CACHE_SUBDIR = ".dkcache"
 
 
 def unpack_one(
-    spec: UnpackSpec,
+    spec: UnpackSpec | PullSpec,
     dest: Path,
     system: str,
     *,
@@ -30,7 +31,7 @@ def unpack_one(
 ) -> Path | None:
     """下载并解压一个 zip 到 ``dest``，返回解压目标目录；跳过时返回 None。
 
-    ``dest`` 是下载目录，压缩包缓存到 ``dest/.dkcache``，解压释放到 ``dest``。
+    ``dest`` 是目标目录，压缩包缓存到 ``dest/.dkcache``，解压释放到 ``dest``。
     """
     if not spec.matches(system):
         logger.info("跳过下载解压 (需要系统 {}): {}", "/".join(spec.systems or ()), spec.url)

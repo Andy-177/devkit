@@ -13,8 +13,10 @@ from devkit.recipe import (
     NEXT_JOB,
     DownloadSpec,
     EnvEntry,
+    FetchSpec,
     Job,
     Material,
+    PullSpec,
     Recipe,
     Step,
     UnpackSpec,
@@ -90,8 +92,11 @@ class TestLoadRecipe(unittest.TestCase):
     def test_empty_recipe_defaults(self):
         recipe = self._load({})
         self.assertIsNone(recipe.material)
+        self.assertEqual(recipe.fetches, ())
         self.assertEqual(recipe.downloads, ())
         self.assertEqual(recipe.unzips, ())
+        self.assertEqual(recipe.unpacks, ())
+        self.assertEqual(recipe.pulls, ())
         self.assertEqual(recipe.data, ())
         self.assertEqual(recipe.jobs, ())
         self.assertEqual(recipe.dir, self.tmp)
@@ -250,10 +255,48 @@ class TestDownloadUnzip(unittest.TestCase):
         self.assertTrue(spec.matches("win_amd64"))
         self.assertFalse(spec.matches("linux_amd64"))
         self.assertTrue(DownloadSpec("u", None).matches("anything"))
+        self.assertTrue(FetchSpec("u", None).matches("anything"))
+        self.assertFalse(FetchSpec("u", ("linux_amd64",)).matches("win_amd64"))
         self.assertTrue(UnzipSpec("z", None).matches("anything"))
         self.assertFalse(UnzipSpec("z", ("linux_amd64",)).matches("win_amd64"))
         self.assertTrue(UnpackSpec("u", None).matches("anything"))
         self.assertFalse(UnpackSpec("u", ("linux_amd64",)).matches("win_amd64"))
+        self.assertTrue(PullSpec("u", None).matches("anything"))
+        self.assertFalse(PullSpec("u", ("linux_amd64",)).matches("win_amd64"))
+
+    def test_fetch_parsing(self):
+        recipe = load_recipe(write_recipe(self.tmp, {"fetch": [
+            "https://a/b.zip",
+            {"url": "https://a/c.zip", "system": "win_amd64"},
+        ]}))
+        self.assertEqual(recipe.fetches, (
+            FetchSpec("https://a/b.zip"),
+            FetchSpec("https://a/c.zip", ("win_amd64",)),
+        ))
+
+    def test_fetch_rejects_extract(self):
+        with self.assertRaises(RecipeError):
+            load_recipe(write_recipe(self.tmp, {
+                "fetch": [{"url": "https://a/b.zip", "extract": True}]
+            }))
+
+    def test_pull_parsing_default_extract_true(self):
+        recipe = load_recipe(write_recipe(self.tmp, {"pull": [
+            "https://a/b.zip",
+            {"url": "https://a/c.zip", "system": ["win_amd64"], "extract": False},
+            {"url": "https://a/d.zip", "extract": True},
+        ]}))
+        self.assertEqual(recipe.pulls, (
+            PullSpec("https://a/b.zip", None, True),
+            PullSpec("https://a/c.zip", ("win_amd64",), False),
+            PullSpec("https://a/d.zip", None, True),
+        ))
+
+    def test_pull_rejects_unknown_fields(self):
+        with self.assertRaises(RecipeError):
+            load_recipe(write_recipe(self.tmp, {
+                "pull": [{"url": "https://a/b.zip", "file": "x"}]
+            }))
 
 
 class TestRunParsing(unittest.TestCase):
