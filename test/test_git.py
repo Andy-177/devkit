@@ -10,7 +10,7 @@ from pathlib import Path
 
 from devkit.errors import CloneError
 from devkit.git import ensure_clone
-from devkit.recipe import Material
+from devkit.recipe import Clone
 
 try:
     import dulwich  # noqa: F401
@@ -44,7 +44,7 @@ class TestEnsureClone(unittest.TestCase):
     def test_clone_local_repo(self):
         origin = make_origin(self.tmp)
         target = self.tmp / "work" / "repo"
-        result = ensure_clone(Material(repo=str(origin)), target)
+        result = ensure_clone(Clone(repo=str(origin)), target)
         self.assertEqual(result, target)
         self.assertTrue((target / ".git").exists())
         self.assertEqual((target / "hello.txt").read_text(encoding="utf-8"),
@@ -55,9 +55,9 @@ class TestEnsureClone(unittest.TestCase):
     def test_second_clone_skipped(self):
         origin = make_origin(self.tmp)
         target = self.tmp / "work" / "repo"
-        first = ensure_clone(Material(repo=str(origin)), target)
+        first = ensure_clone(Clone(repo=str(origin)), target)
         (target / "marker.txt").write_text("keep", encoding="utf-8")
-        second = ensure_clone(Material(repo=str(origin)), target)
+        second = ensure_clone(Clone(repo=str(origin)), target)
         self.assertEqual(first, second)
         self.assertEqual((target / "marker.txt").read_text(encoding="utf-8"), "keep")
 
@@ -65,19 +65,19 @@ class TestEnsureClone(unittest.TestCase):
         target = self.tmp / "work"
         target.write_text("i am a file", encoding="utf-8")
         with self.assertRaisesRegex(CloneError, "同名文件"):
-            ensure_clone(Material(repo="unused"), target)
+            ensure_clone(Clone(repo="unused"), target)
 
     def test_target_nonempty_not_git(self):
         target = self.tmp / "work"
         target.mkdir()
         (target / "junk.txt").write_text("x", encoding="utf-8")
         with self.assertRaisesRegex(CloneError, "非空"):
-            ensure_clone(Material(repo="unused"), target)
+            ensure_clone(Clone(repo="unused"), target)
 
     def test_clone_failure_cleans_staging(self):
         target = self.tmp / "work" / "repo"
         with self.assertRaisesRegex(CloneError, "失败"):
-            ensure_clone(Material(repo=str(self.tmp / "no-such-repo")), target)
+            ensure_clone(Clone(repo=str(self.tmp / "no-such-repo")), target)
         self.assertFalse(target.exists())
         self.assertFalse((target.parent / (target.name + ".devkit-clone")).exists())
 
@@ -85,7 +85,7 @@ class TestEnsureClone(unittest.TestCase):
         origin = make_origin(self.tmp)
         target = self.tmp / "empty"
         target.mkdir()
-        result = ensure_clone(Material(repo=str(origin)), target)
+        result = ensure_clone(Clone(repo=str(origin)), target)
         self.assertTrue((result / ".git").exists())
 
 

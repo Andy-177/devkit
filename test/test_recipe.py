@@ -15,7 +15,7 @@ from devkit.recipe import (
     EnvEntry,
     FetchSpec,
     Job,
-    Material,
+    Clone,
     PullSpec,
     Recipe,
     Step,
@@ -91,7 +91,7 @@ class TestLoadRecipe(unittest.TestCase):
 
     def test_empty_recipe_defaults(self):
         recipe = self._load({})
-        self.assertIsNone(recipe.material)
+        self.assertIsNone(recipe.clone)
         self.assertEqual(recipe.fetches, ())
         self.assertEqual(recipe.downloads, ())
         self.assertEqual(recipe.unzips, ())
@@ -105,55 +105,60 @@ class TestLoadRecipe(unittest.TestCase):
         recipe = self._load({"whatever": 1})
         self.assertIsInstance(recipe, Recipe)
 
+    def test_old_material_key_rejected(self):
+        p = write_recipe(self.tmp, {"material": {"repo": "https://x/y.git"}})
+        with self.assertRaisesRegex(RecipeError, "clone"):
+            load_recipe(p)
+
     def test_bom_tolerated(self):
         p = self.tmp / "recipe.json"
         p.write_text(json.dumps({"data": ["x"]}), encoding="utf-8-sig")
         self.assertEqual(load_recipe(p).data, ("x",))
 
 
-class TestMaterial(unittest.TestCase):
+class TestClone(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
         self.tmp = Path(self._td.name)
         self.addCleanup(self._td.cleanup)
 
-    def _material(self, raw):
-        return load_recipe(write_recipe(self.tmp, {"material": raw})).material
+    def _clone(self, raw):
+        return load_recipe(write_recipe(self.tmp, {"clone": raw})).clone
 
     def test_full(self):
-        m = self._material({"repo": "https://x/y.git", "branch": "dev", "depth": 1,
-                            "commit": "abc"})
-        self.assertEqual(m, Material("https://x/y.git", "dev", 1, "abc"))
+        m = self._clone({"repo": "https://x/y.git", "branch": "dev", "depth": 1,
+                         "commit": "abc"})
+        self.assertEqual(m, Clone("https://x/y.git", "dev", 1, "abc"))
 
     def test_defaults(self):
-        m = self._material({"repo": " https://x/y.git "})
+        m = self._clone({"repo": " https://x/y.git "})
         self.assertEqual(m.repo, "https://x/y.git")
         self.assertIsNone(m.branch)
         self.assertIsNone(m.depth)
         self.assertIsNone(m.commit)
 
     def test_depth_zero_becomes_none(self):
-        self.assertIsNone(self._material({"repo": "r", "depth": 0}).depth)
+        self.assertIsNone(self._clone({"repo": "r", "depth": 0}).depth)
 
     def test_repo_required(self):
         for raw in ({}, {"repo": ""}, {"repo": "  "}, {"repo": 42}):
             with self.assertRaises(RecipeError):
-                self._material(raw)
+                self._clone(raw)
 
     def test_bad_branch_type(self):
         with self.assertRaisesRegex(RecipeError, "branch"):
-            self._material({"repo": "r", "branch": 5})
+            self._clone({"repo": "r", "branch": 5})
 
     def test_empty_branch_string_is_none(self):
-        self.assertIsNone(self._material({"repo": "r", "branch": ""}).branch)
+        self.assertIsNone(self._clone({"repo": "r", "branch": ""}).branch)
 
     def test_bad_depth(self):
         for depth in (-1, "2", True, 1.5):
             with self.assertRaises(RecipeError):
-                self._material({"repo": "r", "depth": depth})
+                self._clone({"repo": "r", "depth": depth})
 
-    def test_material_must_be_object(self):
-        p = write_recipe(self.tmp, {"material": "https://x/y.git"})
+    def test_clone_must_be_object(self):
+        p = write_recipe(self.tmp, {"clone": "https://x/y.git"})
         with self.assertRaisesRegex(RecipeError, "必须是对象"):
             load_recipe(p)
 

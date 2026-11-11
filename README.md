@@ -11,7 +11,7 @@
 * Python 3.10+（已在 3.13 验证）
 * 核心零第三方依赖：没装 loguru 会自动降级为内置日志
 * 可选依赖（自己装进 venv，见下方「构建独立二进制」）：
-  * `dulwich` — `material` 克隆需要
+  * `dulwich` — `clone` 字段的 git 克隆需要
   * `littledl` — `download` 下载需要
   * `loguru` — 彩色日志（可选）
   * `prompt_toolkit` — `develop` 交互终端需要（`devlop` 为兼容别名）
@@ -93,13 +93,13 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 
 ## 配方格式
 
-顶层字段全部可选，固定执行顺序：`material` 克隆 -> `fetch`（按列表顺序，下载到配方目录）
+顶层字段全部可选，固定执行顺序：`clone` 克隆 -> `fetch`（按列表顺序，下载到配方目录）
 -> `download`（按列表顺序，下载到工作区）-> `unzip`（按列表顺序）-> `unpack`（按列表顺序，
 下载/解压到工作区）-> `pull`（按列表顺序，缓存/解压到配方目录）-> `jobs`（按声明顺序）。
 
 ```json
 {
-  "material": {
+  "clone": {
     "repo": "https://github.com/xxx/yyy.git",
     "branch": "main",
     "depth": 1,
@@ -151,11 +151,12 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 }
 ```
 
-### material / fetch / download / unzip / unpack / pull
+### clone / fetch / download / unzip / unpack / pull
 
-* `material`：一个 git 仓库；`repo` 必填。`branch` 空 -> 默认分支，`depth` 0/null
+* `clone`：一个 git 仓库；`repo` 必填。`branch` 空 -> 默认分支，`depth` 0/null
   -> 完整历史，`commit` 存在则克隆后检出。克隆先落临时目录，成功才改名，
   失败不留半成品；目标已是 git 仓库则跳过（方便重复执行）。
+  旧的顶层字段 `material` 已彻底移除且不再兼容，请统一改用 `clone`。
 * `fetch` / `download` / `unzip` / `unpack` / `pull`：语法统一，每一项是字符串简写或对象：
 
   ```json
@@ -216,7 +217,7 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 
 ### develop / shell 交互终端
 
-`devkit develop recipe.json` 先执行配方的非 `jobs` 部分（`material`/`fetch`/`download`/
+`devkit develop recipe.json` 先执行配方的非 `jobs` 部分（`clone`/`fetch`/`download`/
 `unzip`/`unpack`/`pull`），然后进入交互终端。终端默认工作目录是 `--workdir`；命令通过与
 `run` 相同的执行路径运行，因此继承配方级 `env`/`area`，但不会继承作业级、步骤级
 环境。`cd`/`chdir`、`exit`/`quit`/`logout` 是终端内建命令。
@@ -273,7 +274,7 @@ develop 用户名@PC名 完整所在路径 $
 
 `expression` 可写在全局、作业、步骤三处，按就近原则覆盖：`true` 开启全部，
 `["run", "env", ...]` 是功能/字段白名单，`false` 关闭（可关闭上层开启的表达式）。
-可用功能名：`material`（别名 `clone`）、`fetch`、`download`、`unzip`、`unpack`、`pull`、`env`、
+可用功能名：`clone`、`fetch`、`download`、`unzip`、`unpack`、`pull`、`env`、
 `area`、`data`、`system`、`run`、`call`。默认关闭。`system` 也可用于作业/步骤/
 环境项/下载项的 `system` 过滤（如 `"system": "?!{{get_system_info()}}"`）。
 
@@ -322,7 +323,7 @@ develop 用户名@PC名 完整所在路径 $
 * `next`：`null` 结束本作业；作业名切换到该作业
 * `linkup`：与被指步骤并发执行；组内失败按发起方的 errskip 处理
 * `call`：相对本配方文件的路径（文件或目录，目录按
-  `recipe.json` 查找）；被调配方有 material 时在工作区下
+  `recipe.json` 查找）；被调配方有 clone 时在工作区下
   以配方名开子目录，否则共用父工作区；循环调用会报错
 
 ### 作业（jobs）
@@ -376,7 +377,7 @@ devkit/
   cli.py        命令行入口（python devkit/cli.py 直接可跑）
   runner.py     执行引擎: 克隆 -> fetch/download -> 解压 -> unpack/pull -> 工作流
   recipe.py     配方解析与校验
-  git.py        material 克隆（dulwich）
+  git.py        clone 字段的 git 克隆（dulwich）
   dl.py         下载（littledl）
   unzip.py      本地 zip 解压（zipfile，含 zip-slip 防护）
   unpack.py     下载并解压（download + unzip，unpack/pull 共用，缓存到 .dkcache）

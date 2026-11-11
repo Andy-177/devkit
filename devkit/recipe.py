@@ -3,8 +3,8 @@
 配方是一个 JSON 文件，所有字段都是可选的::
 
     {
-      "material": {
-        "repo": "https://github.com/xxx/yyy.git",   # 有 material 就必须有 repo
+      "clone": {
+        "repo": "https://github.com/xxx/yyy.git",   # 有 clone 就必须有 repo
         "branch": "main",                            # 缺省/null/"" -> 默认分支
         "depth": 1,                                  # 0/null -> 完整历史，>0 -> 浅克隆深度
         "commit": null                               # 可选，克隆后检出该提交
@@ -82,7 +82,7 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
 因此 ``[["echo a"]]``、``[["echo", 0, ">", "out.txt"]]`` 走 shell；而
 ``[["C:/Python/python.exe", "-c", 0]]``、``[["tool.exe", "-v"]]`` 直接启动。
 
-执行顺序是固定的，没有集中式编排：``material`` 克隆 -> ``fetch``（按列表顺序，下载到配方目录）
+执行顺序是固定的，没有集中式编排：``clone`` 克隆 -> ``fetch``（按列表顺序，下载到配方目录）
 -> ``download``（按列表顺序，下载到工作区）-> ``unzip``（按列表顺序）-> ``unpack``（按列表顺序，解压到工作区）
 -> ``pull``（按列表顺序，缓存/解压到配方目录）-> ``jobs``（按声明顺序）。编排的权利下放到步骤里，
 步骤的控制字段（全部可选）::
@@ -184,7 +184,7 @@ data 里出现整数时，含义取决于配方如何被使用：
 ``expression`` 字段可写在顶层、作业、步骤三处（默认关闭），打开后任意字符串里
 的 ``?!{{python_expression}}`` 会在运行时求值（完整 builtins，另含
 ``get_recipe_path()`` / ``get_system_info()`` 等）。``true`` 开启全部，字符串列表是
-功能/字段白名单（``material``/``clone``、``fetch``、``download``、``unzip``、``unpack``、
+功能/字段白名单（``clone``、``fetch``、``download``、``unzip``、``unpack``、
 ``pull``、``env``、``area``、``data``、``system``、``run``、``call``），``false`` 关闭并
 覆盖上层。求值失败会强制终止整个工作流，不受 ``errskip`` 影响。
 """
@@ -224,8 +224,8 @@ DEFAULT_STEP_ERRSKIP = STEP_ERR_STOP
 #: 作业 errskip 缺省: 终止出错的作业，联动的作业跑完再继续下一个作业
 DEFAULT_JOB_ERRSKIP = JOB_ERR_PROCEED
 
-_KNOWN_TOP_KEYS = {"material", "fetch", "download", "unzip", "unpack", "pull", "env", "area", "data", "jobs", "expression"}
-_KNOWN_MATERIAL_KEYS = {"repo", "branch", "depth", "commit"}
+_KNOWN_TOP_KEYS = {"clone", "fetch", "download", "unzip", "unpack", "pull", "env", "area", "data", "jobs", "expression"}
+_KNOWN_CLONE_KEYS = {"repo", "branch", "depth", "commit"}
 _KNOWN_JOB_KEYS = {"system", "env", "area", "steps", "skip", "linkup", "errskip", "expression"}
 _KNOWN_STEP_KEYS = {
     "run",
@@ -246,8 +246,8 @@ _KNOWN_ENV_KEYS = {"key", "value", "system"}
 
 
 @dataclass(frozen=True)
-class Material:
-    """构建材料: 一个 git 仓库。"""
+class Clone:
+    """克隆配置: 一个 git 仓库。"""
 
     repo: str
     branch: str | None = None
@@ -397,7 +397,7 @@ class Recipe:
     """解析后的配方。"""
 
     path: Path
-    material: Material | None = None
+    clone: Clone | None = None
     fetches: tuple[FetchSpec, ...] = ()
     downloads: tuple[DownloadSpec, ...] = ()
     unzips: tuple[UnzipSpec, ...] = ()
@@ -461,12 +461,12 @@ def _optional_str(value: Any, where: str) -> str | None:
     return value or None
 
 
-def _parse_material(raw: Any, where: str) -> Material | None:
+def _parse_clone(raw: Any, where: str) -> Clone | None:
     if raw is None:
         return None
     if not isinstance(raw, dict):
         raise RecipeError(f"{where} 必须是对象")
-    _warn_unknown(raw, _KNOWN_MATERIAL_KEYS, where)
+    _warn_unknown(raw, _KNOWN_CLONE_KEYS, where)
     repo = raw.get("repo")
     if not isinstance(repo, str) or not repo.strip():
         raise RecipeError(f"{where}.repo 必填且不能为空")
@@ -479,7 +479,7 @@ def _parse_material(raw: Any, where: str) -> Material | None:
         if depth < 0:
             raise RecipeError(f"{where}.depth 不能为负数")
         depth = depth or None
-    return Material(repo=repo.strip(), branch=branch, depth=depth, commit=commit)
+    return Clone(repo=repo.strip(), branch=branch, depth=depth, commit=commit)
 
 
 def _parse_expression(raw: Any, where: str) -> bool | tuple[str, ...] | None:
@@ -504,7 +504,6 @@ def is_expression_enabled(
 
     当前作用域的 ``expression`` 为 ``None`` 时向上继承 ``job_expr`` / ``recipe_expr``。
     ``None`` 表示继承上级，``True`` 表示全部开启，列表表示白名单，``False`` 表示关闭。
-    ``material`` 对应 ``clone`` 功能。
     """
     effective = expression
     if effective is None:
@@ -870,10 +869,12 @@ def _parse_jobs(raw: Any, where: str) -> tuple[Job, ...]:
 
 
 def _parse_recipe(path: Path, raw: dict) -> Recipe:
+    if "material" in raw:
+        raise RecipeError(f"{path}: 顶层字段 material 已改名为 clone，旧写法不再兼容")
     _warn_unknown(raw, _KNOWN_TOP_KEYS, str(path))
     return Recipe(
         path=path,
-        material=_parse_material(raw.get("material"), "material"),
+        clone=_parse_clone(raw.get("clone"), "clone"),
         fetches=_parse_fetch(raw.get("fetch"), "fetch"),
         downloads=_parse_download(raw.get("download"), "download"),
         unzips=_parse_unzip(raw.get("unzip"), "unzip"),

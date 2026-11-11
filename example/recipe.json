@@ -1,5 +1,5 @@
 {
-  "material": {
+  "clone": {
     "repo": "https://example.com/demo.git",
     "depth": 1
   },

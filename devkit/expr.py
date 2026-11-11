@@ -88,9 +88,6 @@ def _iter_expressions(text: str):
 
 ExpressionConfig = bool | tuple[str, ...] | list[str] | None
 
-#: 功能名归一: ``material`` 对应 ``clone`` 功能。
-_FEATURE_ALIASES = {"material": "clone"}
-
 
 def _get_workdir_path(workdir: Path | None) -> tuple[Callable[[], str], Callable[[], str]]:
     def get_workdir_path() -> str:
@@ -228,6 +225,5 @@ def should_eval_expression(effective: ExpressionConfig, feature: str) -> bool:
     if effective is True:
         return True
     if isinstance(effective, (tuple, list)):
-        alias = _FEATURE_ALIASES.get(feature, feature)
-        return feature in effective or alias in effective
+        return feature in effective
     return False

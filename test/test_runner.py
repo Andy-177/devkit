@@ -367,7 +367,7 @@ class TestCall(RunnerTestCase):
         })
         runner = run_recipe(path, self.workdir)
         self.assertFalse(runner.failed)
-        # 无 material 的被调用配方与父配方共用工作区
+        # 无 clone 的被调用配方与父配方共用工作区
         self.assertEqual(_common.read(self.workdir / "child.txt"), "hello-arg")
 
     def test_call_directory_finds_recipe_json(self):
@@ -388,9 +388,9 @@ class TestCall(RunnerTestCase):
         with self.assertRaisesRegex(RecipeError, "循环"):
             runner.run(path)
 
-    def test_child_with_material_gets_own_subdir(self):
+    def test_child_with_clone_gets_own_subdir(self):
         write_recipe(self.tmp, {
-            "material": {"repo": "https://example.invalid/x.git"},
+            "clone": {"repo": "https://example.invalid/x.git"},
             "jobs": {"main": {"steps": {"s": {
                 "run": [["echo", "kid", ">", "kid.txt"]]}}}},
         }, "kid.json")
@@ -399,10 +399,10 @@ class TestCall(RunnerTestCase):
         })
         runner = run_recipe(path, self.workdir, dry_run=True)
         self.assertFalse(runner.failed)
-        # 有 material 的子配方: 工作区下用配方名开了独立子目录
+        # 有 clone 的子配方: 工作区下用配方名开了独立子目录
         kid_dir = self.workdir / "kid"
         self.assertTrue(kid_dir.exists())
-        # dry-run 下没有真的克隆，父配方也没有 material
+        # dry-run 下没有真的克隆，父配方也没有 clone
         self.assertFalse((kid_dir / "workspace").exists())
         self.assertFalse((self.workdir / "workspace").exists())
 
@@ -451,9 +451,9 @@ class TestDryRun(RunnerTestCase):
         self.assertFalse(runner.failed)
         self.assertFalse((self.workdir / "x.txt").exists())
 
-    def test_material_download_clone_skipped_without_network(self):
+    def test_clone_download_skipped_without_network(self):
         path = write_recipe(self.tmp, {
-            "material": {"repo": "https://example.invalid/x.git"},
+            "clone": {"repo": "https://example.invalid/x.git"},
             "download": ["https://example.invalid/tool.zip"],
             "jobs": {"main": {"steps": {"s": {"run": [echo_write("x.txt")]}}}},
         })

@@ -1,4 +1,4 @@
-"""配方执行引擎: material -> fetch/download/unzip/unpack/pull -> jobs 工作流。
+"""配方执行引擎: clone -> fetch/download/unzip/unpack/pull -> jobs 工作流。
 
 工作目录约定:
 
@@ -7,16 +7,16 @@
 * ``fetch`` 与 ``download`` 行为一致，但下载到配方所在目录；
 * ``pull`` 与 ``unpack`` 行为一致，但 ``.dkcache`` 与解压结果都在配方所在目录，
   且 ``extract`` 默认值为 ``true``；
-* 顶层配方若自带 material，克隆结果落在工作区下的 ``workspace`` 子目录；
-  被 ``call`` 的配方若自带 material，则在父工作区下用配方文件名（去掉扩展名）
+* 顶层配方若自带 clone，克隆结果落在工作区下的 ``workspace`` 子目录；
+  被 ``call`` 的配方若自带 clone，则在父工作区下用配方文件名（去掉扩展名）
   开一个子目录，克隆结果落在该子目录的 ``workspace`` 里，避免互相覆盖；没有
-  material 的被调用配方与父配方共用工作区；
+  clone 的被调用配方与父配方共用工作区；
 * zip 文件按"配方目录 -> 克隆的 workspace 子目录 -> 工作区"的顺序查找；
 * ``unpack`` 的 zip 先下载到 ``<工作区>/.dkcache`` 缓存，再解压释放到工作区。
 
 执行顺序与步骤控制:
 
-* 固定顺序: ``material`` 克隆 -> ``fetch``（按列表顺序）-> ``download``（按列表顺序）
+* 固定顺序: ``clone`` 克隆 -> ``fetch``（按列表顺序）-> ``download``（按列表顺序）
   -> ``unzip``（按列表顺序）-> ``unpack``（按列表顺序）-> ``pull``（按列表顺序）
   -> ``jobs``（按声明顺序逐个执行），没有集中式编排；
 * 步骤默认按声明顺序执行，控制字段（``skip``/``errskip``/``linkup``/``jump``/``next``/
@@ -258,7 +258,7 @@ class RecipeRunner:
     # ----------------------------------------------------------------- 配方
 
     def prepare_develop(self, recipe_path: Path | str) -> tuple[Recipe, Path]:
-        """执行配方的非 jobs 部分（material/fetch/download/unzip/unpack/pull）。
+        """执行配方的非 jobs 部分（clone/fetch/download/unzip/unpack/pull）。
 
         返回解析后的配方和工作区目录；终端本身由 ``devkit.develop`` 负责。
         """
@@ -266,7 +266,7 @@ class RecipeRunner:
         recipe = load_recipe(path)
         logger.info("== 配方: {}", recipe.path)
         cwd = self._prepare(recipe, workdir=self.workdir, top=True)
-        if recipe.material is not None:
+        if recipe.clone is not None:
             self._clone(recipe, cwd)
         self._run_fetches(recipe)
         self._run_downloads(recipe)
@@ -341,7 +341,7 @@ class RecipeRunner:
 
     def _prepare(self, recipe: Recipe, *, workdir: Path, top: bool) -> Path:
         """计算并创建该配方的工作目录。"""
-        if top or recipe.material is None:
+        if top or recipe.clone is None:
             cwd = workdir
         else:
             cwd = workdir / recipe.path.stem
@@ -361,7 +361,7 @@ class RecipeRunner:
         env: dict[str, str] | None = None,
     ) -> None:
         """固定顺序: 克隆 -> fetch -> 下载 -> 解压 -> 下载解压 -> pull -> 工作流。"""
-        if recipe.material is not None:
+        if recipe.clone is not None:
             self._clone(recipe, cwd)
         self._run_fetches(recipe)
         self._run_downloads(recipe)
@@ -371,29 +371,29 @@ class RecipeRunner:
         self._run_jobs(recipe, data=data, cwd=cwd, stack=stack, top=top, env=env)
 
     def _clone(self, recipe: Recipe, cwd: Path) -> None:
-        assert recipe.material is not None
-        material = recipe.material
-        if should_eval_expression(self._effective_expr(recipe), "material"):
+        assert recipe.clone is not None
+        clone = recipe.clone
+        if should_eval_expression(self._effective_expr(recipe), "clone"):
             ns = self._get_expr_ns(recipe)
-            material = replace(
-                material,
-                repo=self._eval_str(material.repo, ns),
+            clone = replace(
+                clone,
+                repo=self._eval_str(clone.repo, ns),
                 branch=(
-                    self._eval_str(material.branch, ns)
-                    if material.branch is not None
+                    self._eval_str(clone.branch, ns)
+                    if clone.branch is not None
                     else None
                 ),
                 commit=(
-                    self._eval_str(material.commit, ns)
-                    if material.commit is not None
+                    self._eval_str(clone.commit, ns)
+                    if clone.commit is not None
                     else None
                 ),
             )
         target = cwd / _CLONE_SUBDIR
         if self.dry_run:
-            logger.info("dry-run: 跳过克隆 {} -> {}", material.repo, target)
+            logger.info("dry-run: 跳过克隆 {} -> {}", clone.repo, target)
             return
-        ensure_clone(material, target)
+        ensure_clone(clone, target)
 
     def _eval_specs(self, specs, recipe: Recipe, feature: str, field: str):
         """替换 fetch/download/unzip/unpack/pull 项的 url/file 与 system 过滤。"""

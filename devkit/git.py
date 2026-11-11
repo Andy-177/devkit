@@ -1,4 +1,4 @@
-"""material 的 git 克隆，基于 dulwich.porcelain.clone。"""
+"""配方 ``clone`` 字段的 git 克隆，基于 dulwich.porcelain.clone。"""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ from pathlib import Path
 from loguru import logger
 
 from devkit.errors import CloneError
-from devkit.recipe import Material
+from devkit.recipe import Clone
 
 _STAGING_SUFFIX = ".devkit-clone"
 
 
-def ensure_clone(material: Material, target: Path) -> Path:
-    """确保 material 仓库被克隆到 ``target``，返回工作目录。
+def ensure_clone(clone: Clone, target: Path) -> Path:
+    """确保 ``clone`` 配置的仓库被克隆到 ``target``，返回工作目录。
 
     * ``target`` 已是 git 工作区 -> 跳过克隆（方便重复执行）；
     * ``target`` 为空目录或不存在 -> 执行克隆；
@@ -40,29 +40,29 @@ def ensure_clone(material: Material, target: Path) -> Path:
         target.rmdir()
 
     kwargs: dict[str, object] = {}
-    if material.branch:
-        kwargs["branch"] = material.branch
-    if material.depth:
-        kwargs["depth"] = material.depth
+    if clone.branch:
+        kwargs["branch"] = clone.branch
+    if clone.depth:
+        kwargs["depth"] = clone.depth
 
-    logger.info("克隆 {} -> {}", material.repo, target)
-    logger.info("  分支: {}", material.branch or "默认分支")
-    logger.info("  深度: {}", f"{material.depth} (浅克隆)" if material.depth else "完整历史")
+    logger.info("克隆 {} -> {}", clone.repo, target)
+    logger.info("  分支: {}", clone.branch or "默认分支")
+    logger.info("  深度: {}", f"{clone.depth} (浅克隆)" if clone.depth else "完整历史")
 
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = target.parent / (target.name + _STAGING_SUFFIX)
     shutil.rmtree(staging, ignore_errors=True)
     try:
-        repo = porcelain.clone(material.repo, str(staging), **kwargs)  # type: ignore[arg-type]
+        repo = porcelain.clone(clone.repo, str(staging), **kwargs)  # type: ignore[arg-type]
         try:
-            if material.commit:
-                porcelain.checkout(repo, material.commit)
-                logger.info("  已检出提交: {}", material.commit)
+            if clone.commit:
+                porcelain.checkout(repo, clone.commit)
+                logger.info("  已检出提交: {}", clone.commit)
         finally:
             repo.close()
     except Exception as exc:
         shutil.rmtree(staging, ignore_errors=True)
-        raise CloneError(f"克隆 {material.repo} 失败: {exc}") from exc
+        raise CloneError(f"克隆 {clone.repo} 失败: {exc}") from exc
 
     os.replace(staging, target)
     return target

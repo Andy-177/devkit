@@ -241,8 +241,8 @@ class TestExpressionConfig(unittest.TestCase):
         self.assertTrue(should_eval_expression(True, "run"))
         self.assertTrue(should_eval_expression(["run"], "run"))
         self.assertFalse(should_eval_expression(["run"], "env"))
-        self.assertTrue(should_eval_expression(["clone"], "material"))
-        self.assertTrue(should_eval_expression(["material"], "material"))
+        self.assertTrue(should_eval_expression(["clone"], "clone"))
+        self.assertFalse(should_eval_expression(["material"], "clone"))
 
     def test_is_expression_enabled_inherits(self):
         self.assertTrue(is_expression_enabled(True, "run"))
@@ -251,7 +251,8 @@ class TestExpressionConfig(unittest.TestCase):
         self.assertFalse(
             is_expression_enabled(None, "run", recipe_expr=True, job_expr=False)
         )
-        self.assertTrue(is_expression_enabled(["clone"], "material"))
+        self.assertTrue(is_expression_enabled(["clone"], "clone"))
+        self.assertFalse(is_expression_enabled(["material"], "clone"))
 
 
 class ExpressionRunnerTestCase(unittest.TestCase):
@@ -666,12 +667,12 @@ class TestRuntimeFields(ExpressionRunnerTestCase):
         self.assertEqual(self.read("other.txt"), "")
 
 
-class TestMaterialDownloadUnzipUnpack(ExpressionRunnerTestCase):
-    def test_material_expression(self):
+class TestCloneDownloadUnzipUnpack(ExpressionRunnerTestCase):
+    def test_clone_expression(self):
         runner, path = self.make_raw(
             {
-                "expression": ["material"],
-                "material": {"repo": "?!{{'https://host/' + 'repo.git'}}"},
+                "expression": ["clone"],
+                "clone": {"repo": "?!{{'https://host/' + 'repo.git'}}"},
                 "jobs": {"main": {"steps": {"s": {"run": [["echo", "x"]]}}}},
             }
         )
@@ -679,19 +680,19 @@ class TestMaterialDownloadUnzipUnpack(ExpressionRunnerTestCase):
             runner.run(path)
         self.assertEqual(clone.call_args.args[0].repo, "https://host/repo.git")
 
-    def test_material_clone_alias(self):
+    def test_clone_expression_repo_and_branch(self):
         runner, path = self.make_raw(
             {
                 "expression": ["clone"],
-                "material": {"repo": "?!{{'git://' + 'x'}}", "branch": "?!{{'ma' + 'in'}}"},
+                "clone": {"repo": "?!{{'git://' + 'x'}}", "branch": "?!{{'ma' + 'in'}}"},
                 "jobs": {"main": {"steps": {"s": {"run": [["echo", "x"]]}}}},
             }
         )
-        with mock.patch("devkit.runner.ensure_clone") as clone:
+        with mock.patch("devkit.runner.ensure_clone") as ensure:
             runner.run(path)
-        material = clone.call_args.args[0]
-        self.assertEqual(material.repo, "git://x")
-        self.assertEqual(material.branch, "main")
+        spec = ensure.call_args.args[0]
+        self.assertEqual(spec.repo, "git://x")
+        self.assertEqual(spec.branch, "main")
 
     def test_download_expression(self):
         runner, path = self.make_raw(
@@ -1094,11 +1095,11 @@ class TestExpressionFailuresAreFatal(ExpressionRunnerTestCase):
         with self.assertRaises(ExpressionError):
             runner.run(path)
 
-    def test_material_error_is_fatal(self):
+    def test_clone_error_is_fatal(self):
         runner, path = self.make_raw(
             {
                 "expression": True,
-                "material": {"repo": "?!{{1 / 0}}"},
+                "clone": {"repo": "?!{{1 / 0}}"},
                 "jobs": {"main": {"steps": {"s": {"run": [["echo", "x"]]}}}},
             }
         )
