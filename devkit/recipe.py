@@ -7,7 +7,8 @@
         "repo": "https://github.com/xxx/yyy.git",   # 有 clone 就必须有 repo
         "branch": "main",                            # 缺省/null/"" -> 默认分支
         "depth": 1,                                  # 0/null -> 完整历史，>0 -> 浅克隆深度
-        "commit": null                               # 可选，克隆后检出该提交
+        "commit": null,                              # 可选，克隆后检出该提交
+        "recursive": false                           # true -> 等价于 git clone --recursive
       },
       "download": [
         "https://example.com/tool.zip",                    # 总是下载
@@ -225,7 +226,7 @@ DEFAULT_STEP_ERRSKIP = STEP_ERR_STOP
 DEFAULT_JOB_ERRSKIP = JOB_ERR_PROCEED
 
 _KNOWN_TOP_KEYS = {"clone", "fetch", "download", "unzip", "unpack", "pull", "env", "area", "data", "jobs", "expression"}
-_KNOWN_CLONE_KEYS = {"repo", "branch", "depth", "commit"}
+_KNOWN_CLONE_KEYS = {"repo", "branch", "depth", "commit", "recursive"}
 _KNOWN_JOB_KEYS = {"system", "env", "area", "steps", "skip", "linkup", "errskip", "expression"}
 _KNOWN_STEP_KEYS = {
     "run",
@@ -253,6 +254,7 @@ class Clone:
     branch: str | None = None
     depth: int | None = None
     commit: str | None = None
+    recursive: bool = False
 
 
 @dataclass(frozen=True)
@@ -472,6 +474,7 @@ def _parse_clone(raw: Any, where: str) -> Clone | None:
         raise RecipeError(f"{where}.repo 必填且不能为空")
     branch = _optional_str(raw.get("branch"), f"{where}.branch")
     commit = _optional_str(raw.get("commit"), f"{where}.commit")
+    recursive = _parse_bool(raw.get("recursive"), f"{where}.recursive")
     depth = raw.get("depth")
     if depth is not None:
         if not isinstance(depth, int) or isinstance(depth, bool):
@@ -479,7 +482,13 @@ def _parse_clone(raw: Any, where: str) -> Clone | None:
         if depth < 0:
             raise RecipeError(f"{where}.depth 不能为负数")
         depth = depth or None
-    return Clone(repo=repo.strip(), branch=branch, depth=depth, commit=commit)
+    return Clone(
+        repo=repo.strip(),
+        branch=branch,
+        depth=depth,
+        commit=commit,
+        recursive=recursive,
+    )
 
 
 def _parse_expression(raw: Any, where: str) -> bool | tuple[str, ...] | None:

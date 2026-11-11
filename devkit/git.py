@@ -21,7 +21,8 @@ def ensure_clone(clone: Clone, target: Path) -> Path:
     * ``target`` 为空目录或不存在 -> 执行克隆；
     * ``branch`` 为空/null -> 克隆默认分支；
     * ``depth`` 为 0/null -> 克隆完整历史；
-    * ``commit`` 存在 -> 克隆后检出该提交。
+    * ``commit`` 存在 -> 克隆后检出该提交；
+    * ``recursive`` 为 true -> 等价于 ``git clone --recursive``。
 
     克隆先落在临时目录，成功后才改名到 ``target``，因此克隆失败不会留下
     半成品工作区。
@@ -48,6 +49,7 @@ def ensure_clone(clone: Clone, target: Path) -> Path:
     logger.info("克隆 {} -> {}", clone.repo, target)
     logger.info("  分支: {}", clone.branch or "默认分支")
     logger.info("  深度: {}", f"{clone.depth} (浅克隆)" if clone.depth else "完整历史")
+    logger.info("  子模块: {}", "递归" if clone.recursive else "不处理")
 
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = target.parent / (target.name + _STAGING_SUFFIX)
@@ -58,6 +60,8 @@ def ensure_clone(clone: Clone, target: Path) -> Path:
             if clone.commit:
                 porcelain.checkout(repo, clone.commit)
                 logger.info("  已检出提交: {}", clone.commit)
+            if clone.recursive:
+                _update_submodules(porcelain, repo)
         finally:
             repo.close()
     except Exception as exc:
@@ -66,3 +70,13 @@ def ensure_clone(clone: Clone, target: Path) -> Path:
 
     os.replace(staging, target)
     return target
+
+
+def _update_submodules(porcelain, repo) -> None:
+    """初始化并递归更新子模块，等价于 ``git submodule update --init --recursive``。"""
+    try:
+        porcelain.submodule_update(repo, init=True, recursive=True)
+    except FileNotFoundError:
+        logger.debug("没有 .gitmodules，跳过子模块更新")
+    else:
+        logger.info("  已递归更新子模块")

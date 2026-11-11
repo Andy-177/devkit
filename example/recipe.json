@@ -1,7 +1,8 @@
 {
   "clone": {
     "repo": "https://example.com/demo.git",
-    "depth": 1
+    "depth": 1,
+    "recursive": false
   },
   "download": [
     "https://example.com/tool.zip",

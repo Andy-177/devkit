@@ -122,8 +122,8 @@ class TestClone(unittest.TestCase):
 
     def test_full(self):
         m = self._clone({"repo": "https://x/y.git", "branch": "dev", "depth": 1,
-                         "commit": "abc"})
-        self.assertEqual(m, Clone("https://x/y.git", "dev", 1, "abc"))
+                         "commit": "abc", "recursive": True})
+        self.assertEqual(m, Clone("https://x/y.git", "dev", 1, "abc", True))
 
     def test_defaults(self):
         m = self._clone({"repo": " https://x/y.git "})
@@ -131,6 +131,16 @@ class TestClone(unittest.TestCase):
         self.assertIsNone(m.branch)
         self.assertIsNone(m.depth)
         self.assertIsNone(m.commit)
+        self.assertFalse(m.recursive)
+
+    def test_recursive_true_and_false(self):
+        self.assertTrue(self._clone({"repo": "r", "recursive": True}).recursive)
+        self.assertFalse(self._clone({"repo": "r", "recursive": False}).recursive)
+
+    def test_bad_recursive(self):
+        for recursive in (1, "true", [], {}):
+            with self.assertRaisesRegex(RecipeError, "recursive"):
+                self._clone({"repo": "r", "recursive": recursive})
 
     def test_depth_zero_becomes_none(self):
         self.assertIsNone(self._clone({"repo": "r", "depth": 0}).depth)

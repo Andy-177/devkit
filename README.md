@@ -103,7 +103,8 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
     "repo": "https://github.com/xxx/yyy.git",
     "branch": "main",
     "depth": 1,
-    "commit": null
+    "commit": null,
+    "recursive": false
   },
   "fetch": [
     "https://example.com/recipe-asset.zip",
@@ -154,7 +155,8 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 ### clone / fetch / download / unzip / unpack / pull
 
 * `clone`：一个 git 仓库；`repo` 必填。`branch` 空 -> 默认分支，`depth` 0/null
-  -> 完整历史，`commit` 存在则克隆后检出。克隆先落临时目录，成功才改名，
+  -> 完整历史，`commit` 存在则克隆后检出，`recursive` 为 `true` 时等价于
+  `git clone --recursive`（默认 `false`，不处理子模块）。克隆先落临时目录，成功才改名，
   失败不留半成品；目标已是 git 仓库则跳过（方便重复执行）。
 * `fetch` / `download` / `unzip` / `unpack` / `pull`：语法统一，每一项是字符串简写或对象：
 

@@ -34,6 +34,30 @@ def make_origin(tmp: Path) -> Path:
     return origin
 
 
+def make_superproject(tmp: Path, sub_origin: Path) -> Path:
+    """造一个带 gitlink 子模块的仓库，返回其路径。"""
+    from dulwich import porcelain
+    from dulwich.index import IndexEntry
+
+    super_origin = tmp / "super"
+    porcelain.init(str(super_origin))
+    porcelain.submodule_add(str(super_origin), sub_origin.as_uri(), path="sub")
+    (super_origin / "readme.txt").write_text("super", encoding="utf-8")
+    porcelain.add(str(super_origin), paths=[b".gitmodules", b"readme.txt"])
+    with porcelain.open_repo_closing(str(sub_origin)) as sub_repo:
+        sub_sha = sub_repo.head()
+    with porcelain.open_repo_closing(str(super_origin)) as repo:
+        index = repo.open_index()
+        index[b"sub"] = IndexEntry(
+            ctime=0, mtime=0, dev=0, ino=0, mode=0o160000,
+            uid=0, gid=0, size=0, sha=sub_sha,
+        )
+        index.write()
+    porcelain.commit(str(super_origin), message=b"init with submodule",
+                     author=b"test <test@example.com>")
+    return super_origin
+
+
 @needs_dulwich
 class TestEnsureClone(unittest.TestCase):
     def setUp(self):
@@ -87,6 +111,27 @@ class TestEnsureClone(unittest.TestCase):
         target.mkdir()
         result = ensure_clone(Clone(repo=str(origin)), target)
         self.assertTrue((result / ".git").exists())
+
+    def test_recursive_clones_submodules(self):
+        sub_tmp = self.tmp / "subsrc"
+        sub_tmp.mkdir()
+        sub_origin = make_origin(sub_tmp)
+        super_origin = make_superproject(self.tmp, sub_origin)
+        target = self.tmp / "work" / "super"
+        ensure_clone(Clone(repo=str(super_origin), recursive=True), target)
+        self.assertEqual(
+            (target / "sub" / "hello.txt").read_text(encoding="utf-8"),
+            "hello from origin",
+        )
+
+    def test_non_recursive_leaves_submodules_absent(self):
+        sub_tmp = self.tmp / "subsrc"
+        sub_tmp.mkdir()
+        sub_origin = make_origin(sub_tmp)
+        super_origin = make_superproject(self.tmp, sub_origin)
+        target = self.tmp / "work" / "super"
+        ensure_clone(Clone(repo=str(super_origin)), target)
+        self.assertFalse((target / "sub" / "hello.txt").exists())
 
 
 if __name__ == "__main__":
