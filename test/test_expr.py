@@ -242,7 +242,6 @@ class TestExpressionConfig(unittest.TestCase):
         self.assertTrue(should_eval_expression(["run"], "run"))
         self.assertFalse(should_eval_expression(["run"], "env"))
         self.assertTrue(should_eval_expression(["clone"], "clone"))
-        self.assertFalse(should_eval_expression(["material"], "clone"))
 
     def test_is_expression_enabled_inherits(self):
         self.assertTrue(is_expression_enabled(True, "run"))
@@ -252,7 +251,6 @@ class TestExpressionConfig(unittest.TestCase):
             is_expression_enabled(None, "run", recipe_expr=True, job_expr=False)
         )
         self.assertTrue(is_expression_enabled(["clone"], "clone"))
-        self.assertFalse(is_expression_enabled(["material"], "clone"))
 
 
 class ExpressionRunnerTestCase(unittest.TestCase):

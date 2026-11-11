@@ -105,11 +105,6 @@ class TestLoadRecipe(unittest.TestCase):
         recipe = self._load({"whatever": 1})
         self.assertIsInstance(recipe, Recipe)
 
-    def test_old_material_key_rejected(self):
-        p = write_recipe(self.tmp, {"material": {"repo": "https://x/y.git"}})
-        with self.assertRaisesRegex(RecipeError, "clone"):
-            load_recipe(p)
-
     def test_bom_tolerated(self):
         p = self.tmp / "recipe.json"
         p.write_text(json.dumps({"data": ["x"]}), encoding="utf-8-sig")

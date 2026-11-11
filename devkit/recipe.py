@@ -869,8 +869,6 @@ def _parse_jobs(raw: Any, where: str) -> tuple[Job, ...]:
 
 
 def _parse_recipe(path: Path, raw: dict) -> Recipe:
-    if "material" in raw:
-        raise RecipeError(f"{path}: 顶层字段 material 已改名为 clone，旧写法不再兼容")
     _warn_unknown(raw, _KNOWN_TOP_KEYS, str(path))
     return Recipe(
         path=path,

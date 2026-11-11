@@ -156,7 +156,6 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 * `clone`：一个 git 仓库；`repo` 必填。`branch` 空 -> 默认分支，`depth` 0/null
   -> 完整历史，`commit` 存在则克隆后检出。克隆先落临时目录，成功才改名，
   失败不留半成品；目标已是 git 仓库则跳过（方便重复执行）。
-  旧的顶层字段 `material` 已彻底移除且不再兼容，请统一改用 `clone`。
 * `fetch` / `download` / `unzip` / `unpack` / `pull`：语法统一，每一项是字符串简写或对象：
 
   ```json
