@@ -353,7 +353,7 @@ run（shell 命令）-> call（子配方）-> exec（Python 脚本）-> eval（P
 ```
 
 * 行与行之间用换行拼接，然后整体交给 Python 的 `exec()` 执行；
-* 脚本之间、脚本与 `eval` 之间共用命名空间。
+* 每个脚本都是一次**独立的** `exec()` 调用：同一个脚本内的行共享命名空间，脚本之间不共享。
 
 `eval` 是表达式列表，按顺序交给 Python 的 `eval()` 求值：
 
@@ -364,10 +364,9 @@ run（shell 命令）-> call（子配方）-> exec（Python 脚本）-> eval（P
 ]
 ```
 
-* `exec` 和 `eval` 共用同一个命名空间，所以前面的脚本/表达式定义的变量，后面的可以直接使用；
-  不同步骤之间不共享命名空间；
-* 命名空间包含完整 builtins，以及表达式系统的 `get_recipe_path()` / `get_recipe_name()` /
-  `get_workdir_path()` / `get_workdir_name()` / `get_system_info()`；
+* 每个表达式都是一次**独立的** `eval()` 调用，表达式之间、表达式与脚本之间都不共享命名空间；
+* 每次 `exec`/`eval` 的命名空间都包含完整 builtins，以及表达式系统的 `get_recipe_path()` /
+  `get_recipe_name()` / `get_workdir_path()` / `get_workdir_name()` / `get_system_info()`；
 * 执行时当前目录会临时切到该步骤的工作区，脚本里的相对路径按工作区解析；
 * `exec`/`eval` 抛异常时，按该步骤的 `errskip` / `forward` 处理，错误信息里带完整 traceback；
 * `--dry-run` 只打印日志，不执行 `exec`/`eval`。
@@ -381,9 +380,10 @@ run（shell 命令）-> call（子配方）-> exec（Python 脚本）-> eval（P
       "steps": {
         "greet": {
           "exec": [
-            ["name = 'hello'", "print(name)"]
+            ["name = 'hello'", "print(name)"],
+            ["other = 'world'", "print(other)"]
           ],
-          "eval": ["assert name == 'hello'"]
+          "eval": ["print('eval 与 exec 的命名空间互相独立')"]
         }
       }
     }

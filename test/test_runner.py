@@ -446,15 +446,28 @@ class TestExecEval(RunnerTestCase):
     def run_step(self, **body) -> RecipeRunner:
         return self.run_raw({"jobs": {"j": {"steps": {"s": body}}}})
 
-    def test_exec_lines_and_shared_namespace(self):
+    def test_exec_lines_share_namespace_within_script(self):
         self.run_step(
-            exec=[
-                ["import pathlib", "a = 1", "b = a + 1"],
-                ["c = a + b"],
-            ],
-            eval=["pathlib.Path('eval.txt').write_text(str(c))"],
+            exec=[[
+                "import pathlib",
+                "a = 1",
+                "b = a + 1",
+                "pathlib.Path('exec.txt').write_text(str(b))",
+            ]],
         )
-        self.assertEqual(_common.read(self.workdir / "eval.txt"), "3")
+        self.assertEqual(_common.read(self.workdir / "exec.txt"), "2")
+
+    def test_exec_scripts_are_independent(self):
+        with self.assertRaisesRegex(StepError, r"(?s)exec\[2\].*NameError"):
+            self.run_step(errskip="crash", exec=[["x = 1"], ["print(x)"]])
+
+    def test_eval_does_not_see_exec_namespace(self):
+        with self.assertRaisesRegex(StepError, r"(?s)eval\[1\].*NameError"):
+            self.run_step(errskip="crash", exec=[["x = 1"]], eval=["x"])
+
+    def test_eval_expressions_are_independent(self):
+        with self.assertRaisesRegex(StepError, r"(?s)eval\[2\].*NameError"):
+            self.run_step(errskip="crash", eval=["(x := 1)", "x"])
 
     def test_exec_runs_in_workdir(self):
         self.run_step(exec=[[
@@ -477,7 +490,10 @@ class TestExecEval(RunnerTestCase):
                 "p = pathlib.Path('order.txt')",
                 "p.write_text(p.read_text() + 'exec')",
             ]],
-            eval=["p.write_text(p.read_text() + 'eval')"],
+            eval=[
+                "__import__('pathlib').Path('order.txt')"
+                ".write_text(__import__('pathlib').Path('order.txt').read_text() + 'eval')"
+            ],
         )
         content = _common.read(self.workdir / "order.txt")
         self.assertEqual("".join(content.split()), "runexeceval")

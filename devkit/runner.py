@@ -469,7 +469,6 @@ class RecipeRunner:
                 logger.info("dry-run: 跳过步骤 {} 的 eval[{}]: {}", step.name, index, expr)
             return
 
-        ns = self._get_expr_ns(recipe)
         # os.chdir 是进程级的：联动步骤并发执行时，必须把切换目录这一段串行化。
         with _PYTHON_CWD_LOCK:
             previous = os.getcwd()
@@ -480,20 +479,32 @@ class RecipeRunner:
                     logger.info("  > exec[{}] ({} 行)", index, len(script))
                     logger.debug("{}", source)
                     try:
+                        # 每个脚本都是独立的 exec() 调用，命名空间互不共享。
+                        ns = self._get_expr_ns(recipe)
                         builtins.exec(source, ns, ns)
-                    except (Exception, SystemExit):
+                    except (Exception, SystemExit) as exc:
+                        logger.error(
+                            "步骤 {} exec[{}] 执行失败:\n{}", step.name, index,
+                            traceback.format_exc(),
+                        )
                         raise StepError(
-                            f"{recipe.path.name} 步骤 {step.name} exec[{index}] 执行失败:\n"
-                            f"{traceback.format_exc()}"
+                            f"{recipe.path.name} 步骤 {step.name} exec[{index}] "
+                            f"执行失败: {exc!r}"
                         ) from None
                 for index, expr in enumerate(step.evals, 1):
                     logger.info("  > eval[{}]: {}", index, expr)
                     try:
+                        # 每个表达式也是独立的 eval() 调用，命名空间互不共享。
+                        ns = self._get_expr_ns(recipe)
                         result = builtins.eval(expr, ns, ns)
-                    except (Exception, SystemExit):
+                    except (Exception, SystemExit) as exc:
+                        logger.error(
+                            "步骤 {} eval[{}] 求值失败:\n{}", step.name, index,
+                            traceback.format_exc(),
+                        )
                         raise StepError(
-                            f"{recipe.path.name} 步骤 {step.name} eval[{index}] 求值失败:\n"
-                            f"{traceback.format_exc()}"
+                            f"{recipe.path.name} 步骤 {step.name} eval[{index}] "
+                            f"求值失败: {exc!r}"
                         ) from None
                     logger.debug("  < eval[{}] = {!r}", index, result)
             finally:

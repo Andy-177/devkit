@@ -86,17 +86,17 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
 ``exec`` 和 ``eval`` 是步骤字段，与 ``run`` 平级。一个步骤里的执行顺序是
 ``run`` -> ``call`` -> ``exec`` -> ``eval``。``exec`` 是"脚本列表"：每个脚本是"行列表"，
 每一行是一个 Python 源码字符串；行与行之间用换行拼接，然后整体交给 Python ``exec``。
-``eval`` 是表达式列表，按顺序用 Python ``eval`` 求值。同一个步骤里的 ``exec``/``eval``
-共用同一个命名空间，可使用表达式系统提供的 ``get_recipe_path()`` / ``get_system_info()``
-等函数；失败按该步骤的 ``errskip``/``forward`` 处理::
+``eval`` 是表达式列表，按顺序用 Python ``eval`` 求值。每个脚本、每个表达式都是**独立的**
+``exec``/``eval`` 调用，命名空间互不共享；可使用表达式系统提供的 ``get_recipe_path()`` /
+``get_system_info()`` 等函数。失败按该步骤的 ``errskip``/``forward`` 处理::
 
     "init": {
       "run": [["echo", "hi"]],
       "exec": [
-        ["x = 1", "print(x)"],       # 第一个脚本: 两行
-        ["y = x + 1", "print(y)"]    # 第二个脚本: 与上一个共用命名空间
+        ["x = 1", "print(x)"],       # 第一个脚本: 两行，同一个 exec 内共享命名空间
+        ["y = 2", "print(y)"]        # 第二个脚本: 独立命名空间，读不到 x
       ],
-      "eval": ["x + y", "print(x * y)"]  # 依次 eval
+      "eval": ["1 + 1", "print('ok')"]  # 每个表达式也各自独立
     }
 
 执行顺序是固定的，没有集中式编排：``clone`` 克隆 -> ``fetch``（按列表顺序，下载到配方目录）
@@ -381,7 +381,8 @@ class Step:
     空格拼成一条 shell 命令行。
 
     ``exec`` 是 Python 脚本列表（脚本 -> 行 -> 源码字符串），``eval`` 是 Python 表达式列表；
-    两者在 ``run``/``call`` 之后执行，同一步骤内共用命名空间，失败按 ``errskip`` 处理。
+    两者在 ``run``/``call`` 之后执行。每个脚本/表达式都是独立的调用，命名空间互不共享，
+    失败按 ``errskip`` 处理。
     """
 
     name: str
