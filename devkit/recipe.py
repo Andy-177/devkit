@@ -31,11 +31,6 @@
          "system": "win_arm64"}                            # 仅系统匹配的项才生效
       ],
       "data": ["build.sh", 0],
-      "exec": [
-        [["import os"], ["print(os.getcwd())"]],           # 一个脚本: 两行
-        [["x = ", 1], ["print(x)"]]                        # 片段可直接拼接，数字取 data
-      ],
-      "eval": ["1 + 1", "get_system_info()"],
       "jobs": {
         "build-windows": {
           "system": "win_amd64",          # 与当前系统不一致则跳过该工作流
@@ -88,27 +83,33 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
 因此 ``[["echo a"]]``、``[["echo", 0, ">", "out.txt"]]`` 走 shell；而
 ``[["C:/Python/python.exe", "-c", 0]]``、``[["tool.exe", "-v"]]`` 直接启动。
 
-``exec`` 和 ``eval`` 在 ``jobs`` 之前执行。``exec`` 是"脚本列表"：每个脚本是"行列表"，
+``exec`` 和 ``eval`` 是步骤字段，与 ``run`` 平级。一个步骤里的执行顺序是
+``run`` -> ``call`` -> ``exec`` -> ``eval``。``exec`` 是"脚本列表"：每个脚本是"行列表"，
 每一行又是"片段列表"，片段只能是字符串或数字（数字是 data 下标）；同一行的片段直接拼接，
 行与行之间用换行拼接，然后整体交给 Python ``exec``。``eval`` 是表达式列表，按顺序用
-Python ``eval`` 求值。两者共用同一个命名空间，可使用表达式系统提供的
-``get_recipe_path()`` / ``get_system_info()`` 等函数；执行失败会终止整个构建::
+Python ``eval`` 求值。同一个步骤里的 ``exec``/``eval`` 共用同一个命名空间，可使用表达式
+系统提供的 ``get_recipe_path()`` / ``get_system_info()`` 等函数；失败按该步骤的
+``errskip``/``forward`` 处理::
 
-    "exec": [
-      [["x = 1"], ["print(x)"]],       # 第一个脚本: 两行
-      [["y = x + 1"], ["print(y)"]]    # 第二个脚本: 与上一个共用命名空间
-    ],
-    "eval": ["x + y", "print(x * y)"]  # 依次 eval
+    "init": {
+      "run": [["echo", "hi"]],
+      "exec": [
+        [["x = 1"], ["print(x)"]],       # 第一个脚本: 两行
+        [["y = x + 1"], ["print(y)"]]    # 第二个脚本: 与上一个共用命名空间
+      ],
+      "eval": ["x + y", "print(x * y)"]  # 依次 eval
+    }
 
 执行顺序是固定的，没有集中式编排：``clone`` 克隆 -> ``fetch``（按列表顺序，下载到配方目录）
 -> ``download``（按列表顺序，下载到工作区）-> ``unzip``（按列表顺序）-> ``unpack``（按列表顺序，解压到工作区）
--> ``pull``（按列表顺序，缓存/解压到配方目录）-> ``exec``（按列表顺序）-> ``eval``（按列表顺序）
--> ``jobs``（按声明顺序）。编排的权利下放到步骤里，
+-> ``pull``（按列表顺序，缓存/解压到配方目录）-> ``jobs``（按声明顺序）。编排的权利下放到步骤里，
 步骤的控制字段（全部可选）::
 
     "init": {
       "run": [...],
       "call": {...},
+      "exec": [...],        # Python 脚本列表（在 run/call 之后执行）
+      "eval": [...],        # Python 表达式列表（在 exec 之后执行）
       "skip": true,         # 顺序走到这个步骤时跳过它（被 jump/linkup/forward 指到时仍然执行）
       "errskip": "stop",    # 失败等级: crash/stop/proceed/skip（缺省 stop）
       "linkup": ["other"],  # 联动: 和 other 等步骤一起并发执行
@@ -243,12 +244,14 @@ DEFAULT_STEP_ERRSKIP = STEP_ERR_STOP
 #: 作业 errskip 缺省: 终止出错的作业，联动的作业跑完再继续下一个作业
 DEFAULT_JOB_ERRSKIP = JOB_ERR_PROCEED
 
-_KNOWN_TOP_KEYS = {"clone", "fetch", "download", "unzip", "unpack", "pull", "exec", "eval", "env", "area", "data", "jobs", "expression"}
+_KNOWN_TOP_KEYS = {"clone", "fetch", "download", "unzip", "unpack", "pull", "env", "area", "data", "jobs", "expression"}
 _KNOWN_CLONE_KEYS = {"repo", "branch", "depth", "commit", "recursive"}
 _KNOWN_JOB_KEYS = {"system", "env", "area", "steps", "skip", "linkup", "errskip", "expression"}
 _KNOWN_STEP_KEYS = {
     "run",
     "call",
+    "exec",
+    "eval",
     "env",
     "area",
     "skip",
@@ -371,17 +374,22 @@ class StepForward:
 
 @dataclass(frozen=True)
 class Step:
-    """一个步骤: 依次执行 run 中的指令，然后调用 call 中的配方。
+    """一个步骤: 依次执行 run 中的指令，然后调用 call 中的配方，最后执行 exec/eval。
 
     ``run`` 永远是双层列表：第一层是要执行的命令列表（按位置决定顺序），第二层是
     一条命令，只能由字符串/数字组成（数字是 data 下标）。运行时若第一个片段是
     绝对路径或工作区里的已有文件，就"可执行文件 + 参数"直接启动，否则各片段按
     空格拼成一条 shell 命令行。
+
+    ``exec`` 是 Python 脚本列表（脚本 -> 行 -> 片段），``eval`` 是 Python 表达式列表；
+    两者在 ``run``/``call`` 之后执行，同一步骤内共用命名空间，失败按 ``errskip`` 处理。
     """
 
     name: str
     run: tuple[tuple[Any, ...], ...] = ()
     call: tuple[tuple[str, tuple[Any, ...]], ...] = ()
+    execs: tuple[tuple[tuple[Any, ...], ...], ...] = ()
+    evals: tuple[str, ...] = ()
     env: tuple[EnvEntry, ...] = ()
     area: tuple[EnvEntry, ...] | None = None
     skip: bool = False
@@ -423,8 +431,6 @@ class Recipe:
     unzips: tuple[UnzipSpec, ...] = ()
     unpacks: tuple[UnpackSpec, ...] = ()
     pulls: tuple[PullSpec, ...] = ()
-    execs: tuple[tuple[tuple[Any, ...], ...], ...] = ()
-    evals: tuple[str, ...] = ()
     env: tuple[EnvEntry, ...] = ()
     area: tuple[EnvEntry, ...] | None = None
     data: tuple[Any, ...] = ()
@@ -872,6 +878,8 @@ def _parse_steps(raw: Any, where: str) -> tuple[Step, ...]:
                 name=name,
                 run=_parse_run(body.get("run"), f"{step_where}.run"),
                 call=_parse_call(body.get("call"), f"{step_where}.call"),
+                execs=_parse_exec(body.get("exec"), f"{step_where}.exec"),
+                evals=_parse_eval(body.get("eval"), f"{step_where}.eval"),
                 env=_parse_env_block(body.get("env"), f"{step_where}.env") or (),
                 area=_parse_env_block(body.get("area"), f"{step_where}.area"),
                 skip=_parse_bool(body.get("skip"), f"{step_where}.skip"),
@@ -949,8 +957,6 @@ def _parse_recipe(path: Path, raw: dict) -> Recipe:
         unzips=_parse_unzip(raw.get("unzip"), "unzip"),
         unpacks=_parse_unpack(raw.get("unpack"), "unpack"),
         pulls=_parse_pull(raw.get("pull"), "pull"),
-        execs=_parse_exec(raw.get("exec"), "exec"),
-        evals=_parse_eval(raw.get("eval"), "eval"),
         env=_parse_env_block(raw.get("env"), "env") or (),
         area=_parse_env_block(raw.get("area"), "area"),
         data=tuple(raw.get("data") or ()),

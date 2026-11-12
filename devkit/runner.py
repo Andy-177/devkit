@@ -40,6 +40,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
@@ -97,6 +98,9 @@ _CLONE_SUBDIR = "workspace"
 
 #: 并发执行时让子进程脱离控制台输入：交互式程序会直接报错而不是卡住（仅 Windows）
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+
+#: exec/eval 需要临时切换进程 cwd；联动步骤并发时用这把锁串行化切换。
+_PYTHON_CWD_LOCK = threading.Lock()
 
 
 def _quote(text: str) -> str:
@@ -275,9 +279,6 @@ class RecipeRunner:
         self._run_unzips(recipe, cwd)
         self._run_unpacks(recipe)
         self._run_pulls(recipe)
-        data = bind_call_args(recipe, None)
-        data = self._eval_value(data, recipe, feature="data")
-        self._run_python(recipe, data=data, cwd=cwd)
         return recipe, cwd
 
     prepare_devlop = prepare_develop
@@ -373,7 +374,6 @@ class RecipeRunner:
         self._run_unzips(recipe, cwd)
         self._run_unpacks(recipe)
         self._run_pulls(recipe)
-        self._run_python(recipe, data=data, cwd=cwd)
         self._run_jobs(recipe, data=data, cwd=cwd, stack=stack, top=top, env=env)
 
     def _clone(self, recipe: Recipe, cwd: Path) -> None:
@@ -450,50 +450,62 @@ class RecipeRunner:
         for spec in specs:
             unpack_one(spec, recipe.dir, self.system, dry_run=self.dry_run)
 
-    def _run_python(self, recipe: Recipe, *, data: list[Any], cwd: Path) -> None:
-        """执行顶层 ``exec`` 脚本和 ``eval`` 表达式（共用同一个命名空间）。"""
-        if not recipe.execs and not recipe.evals:
+    def _run_step_python(
+        self,
+        step: Step,
+        *,
+        recipe: Recipe,
+        data: list[Any],
+        cwd: Path,
+    ) -> None:
+        """执行步骤里的 ``exec`` 脚本和 ``eval`` 表达式（共用同一个命名空间）。"""
+        if not step.execs and not step.evals:
             return
         if self.dry_run:
-            for index, script in enumerate(recipe.execs, 1):
-                logger.info("dry-run: 跳过 exec[{}] ({} 行)", index, len(script))
-            for index, expr in enumerate(recipe.evals, 1):
-                logger.info("dry-run: 跳过 eval[{}]: {}", index, expr)
+            for index, script in enumerate(step.execs, 1):
+                logger.info(
+                    "dry-run: 跳过步骤 {} 的 exec[{}] ({} 行)", step.name, index, len(script)
+                )
+            for index, expr in enumerate(step.evals, 1):
+                logger.info("dry-run: 跳过步骤 {} 的 eval[{}]: {}", step.name, index, expr)
             return
 
         ns = self._get_expr_ns(recipe)
-        previous = os.getcwd()
-        os.chdir(cwd)
-        try:
-            for index, script in enumerate(recipe.execs, 1):
-                source = self._render_exec(script, data, recipe, index)
-                logger.info("  > exec[{}] ({} 行)", index, len(script))
-                logger.debug("{}", source)
-                try:
-                    builtins.exec(source, ns, ns)
-                except BaseException:  # noqa: BLE001 - 脚本失败必须终止整个构建
-                    raise RecipeError(
-                        f"{recipe.path.name} exec[{index}] 执行失败:\n"
-                        f"{traceback.format_exc()}"
-                    ) from None
-            for index, expr in enumerate(recipe.evals, 1):
-                logger.info("  > eval[{}]: {}", index, expr)
-                try:
-                    result = builtins.eval(expr, ns, ns)
-                except BaseException:  # noqa: BLE001 - 表达式失败必须终止整个构建
-                    raise RecipeError(
-                        f"{recipe.path.name} eval[{index}] 求值失败:\n"
-                        f"{traceback.format_exc()}"
-                    ) from None
-                logger.debug("  < eval[{}] = {!r}", index, result)
-        finally:
-            os.chdir(previous)
+        # os.chdir 是进程级的：联动步骤并发执行时，必须把切换目录这一段串行化。
+        with _PYTHON_CWD_LOCK:
+            previous = os.getcwd()
+            os.chdir(cwd)
+            try:
+                for index, script in enumerate(step.execs, 1):
+                    source = self._render_exec(script, data, recipe, step, index)
+                    logger.info("  > exec[{}] ({} 行)", index, len(script))
+                    logger.debug("{}", source)
+                    try:
+                        builtins.exec(source, ns, ns)
+                    except (Exception, SystemExit):
+                        raise StepError(
+                            f"{recipe.path.name} 步骤 {step.name} exec[{index}] 执行失败:\n"
+                            f"{traceback.format_exc()}"
+                        ) from None
+                for index, expr in enumerate(step.evals, 1):
+                    logger.info("  > eval[{}]: {}", index, expr)
+                    try:
+                        result = builtins.eval(expr, ns, ns)
+                    except (Exception, SystemExit):
+                        raise StepError(
+                            f"{recipe.path.name} 步骤 {step.name} eval[{index}] 求值失败:\n"
+                            f"{traceback.format_exc()}"
+                        ) from None
+                    logger.debug("  < eval[{}] = {!r}", index, result)
+            finally:
+                os.chdir(previous)
 
     def _render_exec(
         self,
         script: tuple[tuple[Any, ...], ...],
         data: list[Any],
         recipe: Recipe,
+        step: Step,
         index: int,
     ) -> str:
         """把 exec 的行/片段结构拼成 Python 源码。"""
@@ -506,14 +518,14 @@ class RecipeRunner:
                     continue
                 if not 0 <= token < len(data):
                     raise RecipeError(
-                        f"{recipe.path.name} exec[{index}]: data 下标 {token} 越界"
-                        f" (data 共 {len(data)} 项)"
+                        f"{recipe.path.name} 步骤 {step.name} exec[{index}]: "
+                        f"data 下标 {token} 越界 (data 共 {len(data)} 项)"
                     )
                 value = data[token]
                 if value is None:
                     raise RecipeError(
-                        f"{recipe.path.name} exec[{index}]: data[{token}] 为 null，"
-                        "不能作为脚本片段"
+                        f"{recipe.path.name} 步骤 {step.name} exec[{index}]: "
+                        f"data[{token}] 为 null，不能作为脚本片段"
                     )
                 parts.append(str(value))
             lines.append("".join(parts))
@@ -945,6 +957,8 @@ class RecipeRunner:
                 top=False,
                 env=step_env,
             )
+
+        self._run_step_python(step, recipe=recipe, data=data, cwd=cwd)
 
     # ----------------------------------------------------------------- 工具
 

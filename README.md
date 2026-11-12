@@ -95,8 +95,7 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
 
 顶层字段全部可选，固定执行顺序：`clone` 克隆 -> `fetch`（按列表顺序，下载到配方目录）
 -> `download`（按列表顺序，下载到工作区）-> `unzip`（按列表顺序）-> `unpack`（按列表顺序，
-下载/解压到工作区）-> `pull`（按列表顺序，缓存/解压到配方目录）-> `exec`（按列表顺序）
--> `eval`（按列表顺序）-> `jobs`（按声明顺序）。
+下载/解压到工作区）-> `pull`（按列表顺序，缓存/解压到配方目录）-> `jobs`（按声明顺序）。
 
 ```json
 {
@@ -133,11 +132,6 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
     {"key": "world", "value": "hello;world", "system": "win_arm64"}
   ],
   "data": ["build.sh", 0],
-  "exec": [
-    [["import os"], ["print(os.getcwd())"]],
-    [["x = ", 1], ["print(x)"]]
-  ],
-  "eval": ["1 + 1", "get_system_info()"],
   "jobs": {
     "build-windows": {
       "system": "win_amd64",
@@ -187,57 +181,6 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
     先把 zip 下载到 `<工作区>/.dkcache` 缓存，再解压释放到工作区目录；
   * `pull` 先把 zip 下载到 `<配方目录>/.dkcache` 缓存，再解压释放到配方目录；
   * 解压均含 zip-slip 防护。
-
-### exec / eval（可选）
-
-`exec` 和 `eval` 都是顶层字段，在 `pull` 之后、`jobs` 之前执行。
-
-`exec` 是脚本列表，每个脚本是行列表，每行是片段列表：
-
-```json
-"exec": [
-  [
-    ["import os"],
-    ["print(os.getcwd())"]
-  ],
-  [
-    ["x = 1"],
-    ["y = x + 1"]
-  ]
-]
-```
-
-* 每行的片段按空字符串直接拼接（如 `["x = ", 1]` -> `x = 1`），行与行之间用换行拼接；
-* 片段只能是字符串或数字；数字表示 `data` 下标，和 `run` 一样；
-* 每个脚本整体交给 Python 的 `exec()` 执行。
-
-`eval` 是表达式列表，按顺序交给 Python 的 `eval()` 求值，结果不参与后续流程：
-
-```json
-"eval": [
-  "1 + 1",
-  "open('status.txt', 'w').write(get_system_info())"
-]
-```
-
-* `exec` 和 `eval` 共用同一个命名空间，所以前面的脚本/表达式定义的变量，后面的可以直接使用；
-* 命名空间包含完整 builtins，以及表达式系统的 `get_recipe_path()` / `get_recipe_name()` /
-  `get_workdir_path()` / `get_workdir_name()` / `get_system_info()`；
-* 执行时当前目录会临时切到该配方的工作区，脚本里的相对路径按工作区解析；
-* 任一脚本或表达式抛异常都会打印完整 traceback 并终止整个构建，不受 `errskip` 影响；
-* `--dry-run` 只打印日志，不执行 `exec`/`eval`。
-
-例如：
-
-```json
-{
-  "data": ["hello"],
-  "exec": [
-    [["name = '", 0, "'"], ["print(name)"]]
-  ],
-  "eval": ["assert name == 'hello'"]
-}
-```
 
 ### env / area 环境块（可选）
 
@@ -357,6 +300,8 @@ develop 用户名@PC名 完整所在路径 $
 "step-name": {
   "run": [...],
   "call": {"child.json": ["arg"]},
+  "exec": [[["print('hi')"]]],
+  "eval": ["1 + 1"],
   "skip": true,
   "errskip": "stop",
   "linkup": ["other-step"],
@@ -381,6 +326,72 @@ develop 用户名@PC名 完整所在路径 $
 * `call`：相对本配方文件的路径（文件或目录，目录按
   `recipe.json` 查找）；被调配方有 clone 时在工作区下
   以配方名开子目录，否则共用父工作区；循环调用会报错
+* `exec` / `eval`：步骤里的 Python 脚本 / 表达式，在 `run` 和 `call` 之后执行；
+  详见下面的 exec / eval 小节
+
+#### exec / eval：步骤里的 Python
+
+`exec` 和 `eval` 是**步骤字段**，与 `run` 平级，不是顶层字段。一个步骤里的执行顺序固定为：
+
+```text
+run（shell 命令）-> call（子配方）-> exec（Python 脚本）-> eval（Python 表达式）
+```
+
+`exec` 是脚本列表，每个脚本是行列表，每行是片段列表：
+
+```json
+"exec": [
+  [
+    ["import os"],
+    ["print(os.getcwd())"]
+  ],
+  [
+    ["x = 1"],
+    ["y = x + 1"]
+  ]
+]
+```
+
+* 每行的片段按空字符串直接拼接（如 `["x = ", 1]` -> `x = 1`），行与行之间用换行拼接；
+* 片段只能是字符串或数字；数字表示 `data` 下标，和 `run` 一样；
+* 每个脚本整体交给 Python 的 `exec()` 执行，脚本之间、脚本与 `eval` 之间共用命名空间。
+
+`eval` 是表达式列表，按顺序交给 Python 的 `eval()` 求值：
+
+```json
+"eval": [
+  "1 + 1",
+  "open('status.txt', 'w').write(get_system_info())"
+]
+```
+
+* `exec` 和 `eval` 共用同一个命名空间，所以前面的脚本/表达式定义的变量，后面的可以直接使用；
+  不同步骤之间不共享命名空间；
+* 命名空间包含完整 builtins，以及表达式系统的 `get_recipe_path()` / `get_recipe_name()` /
+  `get_workdir_path()` / `get_workdir_name()` / `get_system_info()`；
+* 执行时当前目录会临时切到该步骤的工作区，脚本里的相对路径按工作区解析；
+* `exec`/`eval` 抛异常时，按该步骤的 `errskip` / `forward` 处理，错误信息里带完整 traceback；
+* `--dry-run` 只打印日志，不执行 `exec`/`eval`。
+
+例如：
+
+```json
+{
+  "data": ["hello"],
+  "jobs": {
+    "main": {
+      "steps": {
+        "greet": {
+          "exec": [
+            [["name = '", 0, "'"], ["print(name)"]]
+          ],
+          "eval": ["assert name == 'hello'"]
+        }
+      }
+    }
+  }
+}
+```
 
 #### forward：控制步骤执行后的去向
 

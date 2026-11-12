@@ -97,8 +97,6 @@ class TestLoadRecipe(unittest.TestCase):
         self.assertEqual(recipe.unzips, ())
         self.assertEqual(recipe.unpacks, ())
         self.assertEqual(recipe.pulls, ())
-        self.assertEqual(recipe.execs, ())
-        self.assertEqual(recipe.evals, ())
         self.assertEqual(recipe.data, ())
         self.assertEqual(recipe.jobs, ())
         self.assertEqual(recipe.dir, self.tmp)
@@ -356,49 +354,50 @@ class TestExecEvalParsing(unittest.TestCase):
         self.tmp = Path(self._td.name)
         self.addCleanup(self._td.cleanup)
 
-    def _recipe(self, raw):
-        return load_recipe(write_recipe(self.tmp, raw))
+    def _step(self, **body):
+        raw = {"jobs": {"j": {"steps": {"s": body}}}}
+        return load_recipe(write_recipe(self.tmp, raw)).jobs[0].steps[0]
 
     def test_exec_parsing(self):
-        recipe = self._recipe({"exec": [
+        step = self._step(exec=[
             [["a = 1"], ["print(a)"]],
             [["b = ", 0], ["print(b)"]],
-        ]})
-        self.assertEqual(recipe.execs, (
+        ])
+        self.assertEqual(step.execs, (
             (("a = 1",), ("print(a)",)),
             (("b = ", 0), ("print(b)",)),
         ))
 
-    def test_exec_null_is_empty(self):
-        self.assertEqual(self._recipe({}).execs, ())
+    def test_exec_default_is_empty(self):
+        self.assertEqual(self._step().execs, ())
 
     def test_exec_structure_validation(self):
         for raw in (
-            {"exec": "print(1)"},
-            {"exec": ["print(1)"]},
-            {"exec": [["print(1)"]]},
-            {"exec": [[["print(", ["1", ")"]]]]},
-            {"exec": [[[""]]]},
+            "print(1)",
+            ["print(1)"],
+            [["print(1)"]],
+            [[["print(", ["1", ")"]]]],
+            [[[""]]],
         ):
             with self.subTest(raw=raw), self.assertRaises(RecipeError):
-                self._recipe(raw)
+                self._step(exec=raw)
 
     def test_eval_parsing(self):
-        recipe = self._recipe({"eval": ["1 + 1", "print('x')"]})
-        self.assertEqual(recipe.evals, ("1 + 1", "print('x')"))
+        step = self._step(eval=["1 + 1", "print('x')"])
+        self.assertEqual(step.evals, ("1 + 1", "print('x')"))
 
-    def test_eval_null_is_empty(self):
-        self.assertEqual(self._recipe({}).evals, ())
+    def test_eval_default_is_empty(self):
+        self.assertEqual(self._step().evals, ())
 
     def test_eval_validation(self):
         for raw in (
-            {"eval": "1 + 1"},
-            {"eval": [1]},
-            {"eval": [""]},
-            {"eval": ["  "]},
+            "1 + 1",
+            [1],
+            [""],
+            ["  "],
         ):
             with self.subTest(raw=raw), self.assertRaises(RecipeError):
-                self._recipe(raw)
+                self._step(eval=raw)
 
 
 class TestStepControlFields(unittest.TestCase):

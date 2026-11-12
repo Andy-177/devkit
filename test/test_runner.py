@@ -443,51 +443,83 @@ class TestLinkup(RunnerTestCase):
 
 
 class TestExecEval(RunnerTestCase):
+    def run_step(self, **body) -> RecipeRunner:
+        return self.run_raw({"jobs": {"j": {"steps": {"s": body}}}})
+
     def test_exec_lines_and_shared_namespace(self):
-        self.run_raw({
-            "exec": [
-                [["a = ", "1"], ["b = a + 1"]],
+        self.run_step(
+            exec=[
+                [["import pathlib"], ["a = ", "1"], ["b = a + 1"]],
                 [["c = a + b"]],
             ],
-            "eval": ["open('eval.txt', 'w').write(str(c))"],
-        })
+            eval=["pathlib.Path('eval.txt').write_text(str(c))"],
+        )
         self.assertEqual(_common.read(self.workdir / "eval.txt"), "3")
 
     def test_exec_data_substitution(self):
         self.run_raw({
             "data": ["hello"],
-            "exec": [[["open('exec.txt', 'w').write('", 0, "')"]]],
+            "jobs": {"j": {"steps": {"s": {
+                "exec": [[
+                    ["import pathlib"],
+                    ["pathlib.Path('exec.txt').write_text('", 0, "')"],
+                ]],
+            }}}},
         })
         self.assertEqual(_common.read(self.workdir / "exec.txt"), "hello")
 
     def test_exec_runs_in_workdir(self):
-        self.run_raw({"exec": [[["open('cwd.txt', 'w').write('ok')"]]]})
+        self.run_step(exec=[[
+            ["import pathlib"],
+            ["pathlib.Path('cwd.txt').write_text('ok')"],
+        ]])
         self.assertEqual(_common.read(self.workdir / "cwd.txt"), "ok")
 
     def test_eval_helpers_available(self):
-        self.run_raw({
-            "eval": ["open('system.txt', 'w').write(get_system_info())"],
-        })
+        self.run_step(
+            eval=["__import__('pathlib').Path('system.txt').write_text(get_system_info())"]
+        )
         self.assertEqual(_common.read(self.workdir / "system.txt"), TEST_SYSTEM)
 
-    def test_exec_failure_aborts(self):
-        with self.assertRaisesRegex(RecipeError, r"(?s)exec\[1\].*ValueError"):
-            self.run_raw({"exec": [[["raise ValueError('boom')"]]]})
+    def test_run_call_exec_eval_order(self):
+        self.run_step(
+            run=[echo_write("order.txt", "run")],
+            exec=[[
+                ["import pathlib"],
+                ["p = pathlib.Path('order.txt')"],
+                ["p.write_text(p.read_text() + 'exec')"],
+            ]],
+            eval=["p.write_text(p.read_text() + 'eval')"],
+        )
+        content = _common.read(self.workdir / "order.txt")
+        self.assertEqual("".join(content.split()), "runexeceval")
 
-    def test_eval_failure_aborts(self):
-        with self.assertRaisesRegex(RecipeError, r"(?s)eval\[1\].*ZeroDivisionError"):
-            self.run_raw({"eval": ["1 / 0"]})
+    def test_exec_failure_default_stop_marks_failed(self):
+        runner = self.run_step(exec=[[["raise ValueError('boom')"]]])
+        self.assertTrue(runner.failed)
+
+    def test_exec_failure_crash_raises(self):
+        with self.assertRaisesRegex(StepError, r"(?s)exec\[1\].*ValueError"):
+            self.run_step(errskip="crash", exec=[[["raise ValueError('boom')"]]])
+
+    def test_eval_failure_default_stop_marks_failed(self):
+        runner = self.run_step(eval=["1 / 0"])
+        self.assertTrue(runner.failed)
+
+    def test_eval_failure_crash_raises(self):
+        with self.assertRaisesRegex(StepError, r"(?s)eval\[1\].*ZeroDivisionError"):
+            self.run_step(errskip="crash", eval=["1 / 0"])
 
     def test_exec_data_index_out_of_range(self):
         with self.assertRaisesRegex(RecipeError, "越界"):
-            self.run_raw({"exec": [[[0]]]})
+            self.run_step(exec=[[[0]]])
 
     def test_dry_run_skips_exec_and_eval(self):
         runner = self.run_raw(
-            {
+            {"jobs": {"j": {"steps": {"s": {
                 "exec": [[["open('exec.txt', 'w').write('x')"]]],
                 "eval": ["open('eval.txt', 'w').write('x')"],
-            },
+            }}}}},
             dry_run=True,
         )
         self.assertFalse(runner.failed)
