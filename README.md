@@ -319,13 +319,74 @@ develop 用户名@PC名 完整所在路径 $
   * `crash` — 整个构建立即中止，透传退出码
   * `stop` — 终止当前作业，交作业级 errskip 收场
   * `proceed` / `skip` — 终止出错步骤，按去向跳转，作业继续
-* 成功去向优先级：`next` > `forward.success` > `jump` > `forward.jump` > 顺序下一步
-* 失败去向（proceed/skip）：`forward.error` > `jump` > `forward.jump` > 顺序下一步
 * `next`：`null` 结束本作业；作业名切换到该作业
 * `linkup`：与被指步骤并发执行；组内失败按发起方的 errskip 处理
 * `call`：相对本配方文件的路径（文件或目录，目录按
   `recipe.json` 查找）；被调配方有 clone 时在工作区下
   以配方名开子目录，否则共用父工作区；循环调用会报错
+
+#### forward：控制步骤执行后的去向
+
+不写 `forward` 时，步骤执行完就按声明顺序走到下一个步骤。`forward` 用来改变这个去向，
+它只影响**当前作业内部**的步骤，包含四个可选字段：
+
+| 字段 | 类型 | 作用 |
+|---|---|---|
+| `success` | 步骤名 | 当前步骤成功后，跳转到指定步骤 |
+| `error` | 步骤名 | 当前步骤失败且 `errskip` 为 `proceed`/`skip` 时，跳转到指定步骤 |
+| `jump` | `{源步骤: 目标步骤}` | 跳转表：当前作业里某个步骤正常执行完后，跳到目标步骤 |
+| `redirect` | `{源步骤: 目标步骤}` | 重定向表：顺序走到源步骤时不执行它，直接跳到目标步骤 |
+
+`success`/`error` 只属于声明它们的那个步骤；`jump`/`redirect` 是一张作业内的表，
+键是"源步骤"，值是"目标步骤"，会被汇总后统一生效。
+
+简单理解：`success`/`error` 是"这个步骤之后去哪"；`jump`/`redirect` 是"在这个作业里
+登记一条路线"。`jump` 在源步骤正常结束后生效，`redirect` 在顺序走到源步骤时直接绕开它。
+
+**去向优先级**
+
+* 步骤成功后：`next` > `forward.success` > 步骤自己的 `jump` > `forward.jump` 里以该步骤为源的边
+  > 顺序下一步。
+* 步骤失败且 `errskip` 为 `proceed`/`skip` 时：`forward.error` > 步骤自己的 `jump`
+  > `forward.jump` 里以该步骤为源的边 > 顺序下一步。
+* `errskip` 为 `crash`/`stop` 时不会使用 `forward.error`，而是直接中止（`crash`）
+  或终止当前作业（`stop`）。
+
+**和 skip / system 的关系**
+
+* 被 `forward.success`、`forward.error`、`forward.jump` 或 `forward.redirect` 明确指到的步骤，
+  这一次会立即执行，即使它写了 `skip: true`；如果之后又按顺序走到它，仍然遵守 `skip`。
+* `redirect` 在 `skip` 和 `system` 判断之前生效：即使源步骤写了 `skip: true` 或系统不匹配，
+  顺序走到它时也会被重定向，不会执行源步骤。
+
+**约束**
+
+* `jump`/`redirect` 只能引用当前作业里存在的步骤；`success`/`error` 同理。
+* 同一个源步骤不能同时出现在 `jump` 和 `redirect` 里，否则会报"跳转冲突"。
+* 跳转目标是步骤名，不是作业名；要切换作业请用 `next`。
+
+**示例**
+
+```json
+"steps": {
+  "build": {
+    "run": [["build"]],
+    "forward": { "success": "test", "error": "report" }
+  },
+  "test": {
+    "run": [["test"]],
+    "forward": { "jump": { "test": "package" } }
+  },
+  "package": { "run": [["package"]] },
+  "report": { "run": [["report"]], "skip": true }
+}
+```
+
+* `build` 成功 -> 执行 `test`；`build` 失败且 `errskip` 为 `proceed`/`skip` -> 执行 `report`
+  （`report` 虽然 `skip: true`，但被 `forward.error` 明确指到，所以这次会执行）。
+* `test` 成功 -> 执行 `package`。
+* 如果把 `test` 的 `forward.jump` 改成 `"redirect": { "test": "package" }`，则顺序走到 `test`
+  时不会执行 `test`，而是直接执行 `package`。
 
 ### 作业（jobs）
 
