@@ -35,10 +35,12 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import subprocess
 import sys
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from pathlib import Path
@@ -273,6 +275,9 @@ class RecipeRunner:
         self._run_unzips(recipe, cwd)
         self._run_unpacks(recipe)
         self._run_pulls(recipe)
+        data = bind_call_args(recipe, None)
+        data = self._eval_value(data, recipe, feature="data")
+        self._run_python(recipe, data=data, cwd=cwd)
         return recipe, cwd
 
     prepare_devlop = prepare_develop
@@ -368,6 +373,7 @@ class RecipeRunner:
         self._run_unzips(recipe, cwd)
         self._run_unpacks(recipe)
         self._run_pulls(recipe)
+        self._run_python(recipe, data=data, cwd=cwd)
         self._run_jobs(recipe, data=data, cwd=cwd, stack=stack, top=top, env=env)
 
     def _clone(self, recipe: Recipe, cwd: Path) -> None:
@@ -443,6 +449,75 @@ class RecipeRunner:
         specs = self._eval_specs(recipe.pulls, recipe, "pull", "url")
         for spec in specs:
             unpack_one(spec, recipe.dir, self.system, dry_run=self.dry_run)
+
+    def _run_python(self, recipe: Recipe, *, data: list[Any], cwd: Path) -> None:
+        """执行顶层 ``exec`` 脚本和 ``eval`` 表达式（共用同一个命名空间）。"""
+        if not recipe.execs and not recipe.evals:
+            return
+        if self.dry_run:
+            for index, script in enumerate(recipe.execs, 1):
+                logger.info("dry-run: 跳过 exec[{}] ({} 行)", index, len(script))
+            for index, expr in enumerate(recipe.evals, 1):
+                logger.info("dry-run: 跳过 eval[{}]: {}", index, expr)
+            return
+
+        ns = self._get_expr_ns(recipe)
+        previous = os.getcwd()
+        os.chdir(cwd)
+        try:
+            for index, script in enumerate(recipe.execs, 1):
+                source = self._render_exec(script, data, recipe, index)
+                logger.info("  > exec[{}] ({} 行)", index, len(script))
+                logger.debug("{}", source)
+                try:
+                    builtins.exec(source, ns, ns)
+                except BaseException:  # noqa: BLE001 - 脚本失败必须终止整个构建
+                    raise RecipeError(
+                        f"{recipe.path.name} exec[{index}] 执行失败:\n"
+                        f"{traceback.format_exc()}"
+                    ) from None
+            for index, expr in enumerate(recipe.evals, 1):
+                logger.info("  > eval[{}]: {}", index, expr)
+                try:
+                    result = builtins.eval(expr, ns, ns)
+                except BaseException:  # noqa: BLE001 - 表达式失败必须终止整个构建
+                    raise RecipeError(
+                        f"{recipe.path.name} eval[{index}] 求值失败:\n"
+                        f"{traceback.format_exc()}"
+                    ) from None
+                logger.debug("  < eval[{}] = {!r}", index, result)
+        finally:
+            os.chdir(previous)
+
+    def _render_exec(
+        self,
+        script: tuple[tuple[Any, ...], ...],
+        data: list[Any],
+        recipe: Recipe,
+        index: int,
+    ) -> str:
+        """把 exec 的行/片段结构拼成 Python 源码。"""
+        lines: list[str] = []
+        for line in script:
+            parts: list[str] = []
+            for token in line:
+                if isinstance(token, bool) or not isinstance(token, int):
+                    parts.append(str(token))
+                    continue
+                if not 0 <= token < len(data):
+                    raise RecipeError(
+                        f"{recipe.path.name} exec[{index}]: data 下标 {token} 越界"
+                        f" (data 共 {len(data)} 项)"
+                    )
+                value = data[token]
+                if value is None:
+                    raise RecipeError(
+                        f"{recipe.path.name} exec[{index}]: data[{token}] 为 null，"
+                        "不能作为脚本片段"
+                    )
+                parts.append(str(value))
+            lines.append("".join(parts))
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------ job
 

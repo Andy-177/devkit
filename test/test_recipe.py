@@ -97,6 +97,8 @@ class TestLoadRecipe(unittest.TestCase):
         self.assertEqual(recipe.unzips, ())
         self.assertEqual(recipe.unpacks, ())
         self.assertEqual(recipe.pulls, ())
+        self.assertEqual(recipe.execs, ())
+        self.assertEqual(recipe.evals, ())
         self.assertEqual(recipe.data, ())
         self.assertEqual(recipe.jobs, ())
         self.assertEqual(recipe.dir, self.tmp)
@@ -346,6 +348,57 @@ class TestRunParsing(unittest.TestCase):
     def test_numeric_fragments_kept(self):
         steps = self._steps({"s": {"run": [["tool", 0, 1, 2.5]]}})
         self.assertEqual(steps["s"].run, (("tool", 0, 1, 2.5),))
+
+
+class TestExecEvalParsing(unittest.TestCase):
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name)
+        self.addCleanup(self._td.cleanup)
+
+    def _recipe(self, raw):
+        return load_recipe(write_recipe(self.tmp, raw))
+
+    def test_exec_parsing(self):
+        recipe = self._recipe({"exec": [
+            [["a = 1"], ["print(a)"]],
+            [["b = ", 0], ["print(b)"]],
+        ]})
+        self.assertEqual(recipe.execs, (
+            (("a = 1",), ("print(a)",)),
+            (("b = ", 0), ("print(b)",)),
+        ))
+
+    def test_exec_null_is_empty(self):
+        self.assertEqual(self._recipe({}).execs, ())
+
+    def test_exec_structure_validation(self):
+        for raw in (
+            {"exec": "print(1)"},
+            {"exec": ["print(1)"]},
+            {"exec": [["print(1)"]]},
+            {"exec": [[["print(", ["1", ")"]]]]},
+            {"exec": [[[""]]]},
+        ):
+            with self.subTest(raw=raw), self.assertRaises(RecipeError):
+                self._recipe(raw)
+
+    def test_eval_parsing(self):
+        recipe = self._recipe({"eval": ["1 + 1", "print('x')"]})
+        self.assertEqual(recipe.evals, ("1 + 1", "print('x')"))
+
+    def test_eval_null_is_empty(self):
+        self.assertEqual(self._recipe({}).evals, ())
+
+    def test_eval_validation(self):
+        for raw in (
+            {"eval": "1 + 1"},
+            {"eval": [1]},
+            {"eval": [""]},
+            {"eval": ["  "]},
+        ):
+            with self.subTest(raw=raw), self.assertRaises(RecipeError):
+                self._recipe(raw)
 
 
 class TestStepControlFields(unittest.TestCase):

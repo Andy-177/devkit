@@ -442,6 +442,59 @@ class TestLinkup(RunnerTestCase):
             runner.run(path)
 
 
+class TestExecEval(RunnerTestCase):
+    def test_exec_lines_and_shared_namespace(self):
+        self.run_raw({
+            "exec": [
+                [["a = ", "1"], ["b = a + 1"]],
+                [["c = a + b"]],
+            ],
+            "eval": ["open('eval.txt', 'w').write(str(c))"],
+        })
+        self.assertEqual(_common.read(self.workdir / "eval.txt"), "3")
+
+    def test_exec_data_substitution(self):
+        self.run_raw({
+            "data": ["hello"],
+            "exec": [[["open('exec.txt', 'w').write('", 0, "')"]]],
+        })
+        self.assertEqual(_common.read(self.workdir / "exec.txt"), "hello")
+
+    def test_exec_runs_in_workdir(self):
+        self.run_raw({"exec": [[["open('cwd.txt', 'w').write('ok')"]]]})
+        self.assertEqual(_common.read(self.workdir / "cwd.txt"), "ok")
+
+    def test_eval_helpers_available(self):
+        self.run_raw({
+            "eval": ["open('system.txt', 'w').write(get_system_info())"],
+        })
+        self.assertEqual(_common.read(self.workdir / "system.txt"), TEST_SYSTEM)
+
+    def test_exec_failure_aborts(self):
+        with self.assertRaisesRegex(RecipeError, r"(?s)exec\[1\].*ValueError"):
+            self.run_raw({"exec": [[["raise ValueError('boom')"]]]})
+
+    def test_eval_failure_aborts(self):
+        with self.assertRaisesRegex(RecipeError, r"(?s)eval\[1\].*ZeroDivisionError"):
+            self.run_raw({"eval": ["1 / 0"]})
+
+    def test_exec_data_index_out_of_range(self):
+        with self.assertRaisesRegex(RecipeError, "越界"):
+            self.run_raw({"exec": [[[0]]]})
+
+    def test_dry_run_skips_exec_and_eval(self):
+        runner = self.run_raw(
+            {
+                "exec": [[["open('exec.txt', 'w').write('x')"]]],
+                "eval": ["open('eval.txt', 'w').write('x')"],
+            },
+            dry_run=True,
+        )
+        self.assertFalse(runner.failed)
+        self.assertFalse((self.workdir / "exec.txt").exists())
+        self.assertFalse((self.workdir / "eval.txt").exists())
+
+
 class TestDryRun(RunnerTestCase):
     def test_no_side_effects(self):
         path = simple_recipe(self.tmp, steps={

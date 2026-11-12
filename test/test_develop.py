@@ -155,6 +155,17 @@ class TestPrepare(DevelopTestCase):
         recipe, _ = prepare(path)
         self.assertEqual(develop_env(recipe), {"DK_TEST": "recipe"})
 
+    def test_prepare_runs_exec_and_eval(self):
+        path = write_recipe(self.tmp, {
+            "exec": [[["open('exec.txt', 'w').write('x')"]]],
+            "eval": ["open('eval.txt', 'w').write('y')"],
+        })
+        runner = make_runner(self.workdir)
+        prepare = getattr(runner, "prepare_develop", runner.prepare_devlop)
+        prepare(path)
+        self.assertEqual(_common.read(self.workdir / "exec.txt"), "x")
+        self.assertEqual(_common.read(self.workdir / "eval.txt"), "y")
+
     def test_area_replaces_recipe_env(self):
         path = write_recipe(self.tmp, {
             "env": [{"key": "A", "value": "1"}],

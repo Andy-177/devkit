@@ -31,6 +31,11 @@
          "system": "win_arm64"}                            # 仅系统匹配的项才生效
       ],
       "data": ["build.sh", 0],
+      "exec": [
+        [["import os"], ["print(os.getcwd())"]],           # 一个脚本: 两行
+        [["x = ", 1], ["print(x)"]]                        # 片段可直接拼接，数字取 data
+      ],
+      "eval": ["1 + 1", "get_system_info()"],
       "jobs": {
         "build-windows": {
           "system": "win_amd64",          # 与当前系统不一致则跳过该工作流
@@ -83,9 +88,22 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
 因此 ``[["echo a"]]``、``[["echo", 0, ">", "out.txt"]]`` 走 shell；而
 ``[["C:/Python/python.exe", "-c", 0]]``、``[["tool.exe", "-v"]]`` 直接启动。
 
+``exec`` 和 ``eval`` 在 ``jobs`` 之前执行。``exec`` 是"脚本列表"：每个脚本是"行列表"，
+每一行又是"片段列表"，片段只能是字符串或数字（数字是 data 下标）；同一行的片段直接拼接，
+行与行之间用换行拼接，然后整体交给 Python ``exec``。``eval`` 是表达式列表，按顺序用
+Python ``eval`` 求值。两者共用同一个命名空间，可使用表达式系统提供的
+``get_recipe_path()`` / ``get_system_info()`` 等函数；执行失败会终止整个构建::
+
+    "exec": [
+      [["x = 1"], ["print(x)"]],       # 第一个脚本: 两行
+      [["y = x + 1"], ["print(y)"]]    # 第二个脚本: 与上一个共用命名空间
+    ],
+    "eval": ["x + y", "print(x * y)"]  # 依次 eval
+
 执行顺序是固定的，没有集中式编排：``clone`` 克隆 -> ``fetch``（按列表顺序，下载到配方目录）
 -> ``download``（按列表顺序，下载到工作区）-> ``unzip``（按列表顺序）-> ``unpack``（按列表顺序，解压到工作区）
--> ``pull``（按列表顺序，缓存/解压到配方目录）-> ``jobs``（按声明顺序）。编排的权利下放到步骤里，
+-> ``pull``（按列表顺序，缓存/解压到配方目录）-> ``exec``（按列表顺序）-> ``eval``（按列表顺序）
+-> ``jobs``（按声明顺序）。编排的权利下放到步骤里，
 步骤的控制字段（全部可选）::
 
     "init": {
@@ -225,7 +243,7 @@ DEFAULT_STEP_ERRSKIP = STEP_ERR_STOP
 #: 作业 errskip 缺省: 终止出错的作业，联动的作业跑完再继续下一个作业
 DEFAULT_JOB_ERRSKIP = JOB_ERR_PROCEED
 
-_KNOWN_TOP_KEYS = {"clone", "fetch", "download", "unzip", "unpack", "pull", "env", "area", "data", "jobs", "expression"}
+_KNOWN_TOP_KEYS = {"clone", "fetch", "download", "unzip", "unpack", "pull", "exec", "eval", "env", "area", "data", "jobs", "expression"}
 _KNOWN_CLONE_KEYS = {"repo", "branch", "depth", "commit", "recursive"}
 _KNOWN_JOB_KEYS = {"system", "env", "area", "steps", "skip", "linkup", "errskip", "expression"}
 _KNOWN_STEP_KEYS = {
@@ -405,6 +423,8 @@ class Recipe:
     unzips: tuple[UnzipSpec, ...] = ()
     unpacks: tuple[UnpackSpec, ...] = ()
     pulls: tuple[PullSpec, ...] = ()
+    execs: tuple[tuple[tuple[Any, ...], ...], ...] = ()
+    evals: tuple[str, ...] = ()
     env: tuple[EnvEntry, ...] = ()
     area: tuple[EnvEntry, ...] | None = None
     data: tuple[Any, ...] = ()
@@ -686,6 +706,46 @@ def _parse_run(raw: Any, where: str) -> tuple[tuple[Any, ...], ...]:
     return tuple(commands)
 
 
+def _parse_exec(raw: Any, where: str) -> tuple[tuple[tuple[Any, ...], ...], ...]:
+    """exec 是脚本列表: 每个脚本是行列表，每行是片段列表。"""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise RecipeError(f"{where} 必须是脚本列表")
+    scripts: list[tuple[tuple[Any, ...], ...]] = []
+    for script_index, script in enumerate(raw):
+        script_where = f"{where}[{script_index}]"
+        if not isinstance(script, list):
+            raise RecipeError(f"{script_where} 必须是行列表")
+        lines: list[tuple[Any, ...]] = []
+        for line_index, line in enumerate(script):
+            line_where = f"{script_where}[{line_index}]"
+            if not isinstance(line, list):
+                raise RecipeError(f"{line_where} 必须是片段列表")
+            for part in line:
+                if not _run_scalar(part):
+                    raise RecipeError(f"{line_where} 的元素必须是字符串或数字")
+                if isinstance(part, str) and not part:
+                    raise RecipeError(f"{line_where} 片段不能为空")
+            lines.append(tuple(line))
+        scripts.append(tuple(lines))
+    return tuple(scripts)
+
+
+def _parse_eval(raw: Any, where: str) -> tuple[str, ...]:
+    """eval 是 Python 表达式列表。"""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise RecipeError(f"{where} 必须是表达式列表")
+    expressions: list[str] = []
+    for index, expr in enumerate(raw):
+        if not isinstance(expr, str) or not expr.strip():
+            raise RecipeError(f"{where}[{index}] 必须是非空字符串表达式")
+        expressions.append(expr)
+    return tuple(expressions)
+
+
 def _parse_call(raw: Any, where: str) -> tuple[tuple[str, tuple[Any, ...]], ...]:
     if raw is None:
         return ()
@@ -889,6 +949,8 @@ def _parse_recipe(path: Path, raw: dict) -> Recipe:
         unzips=_parse_unzip(raw.get("unzip"), "unzip"),
         unpacks=_parse_unpack(raw.get("unpack"), "unpack"),
         pulls=_parse_pull(raw.get("pull"), "pull"),
+        execs=_parse_exec(raw.get("exec"), "exec"),
+        evals=_parse_eval(raw.get("eval"), "eval"),
         env=_parse_env_block(raw.get("env"), "env") or (),
         area=_parse_env_block(raw.get("area"), "area"),
         data=tuple(raw.get("data") or ()),
