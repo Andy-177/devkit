@@ -300,7 +300,7 @@ develop 用户名@PC名 完整所在路径 $
 "step-name": {
   "run": [...],
   "call": {"child.json": ["arg"]},
-  "exec": [[["print('hi')"]]],
+  "exec": [["print('hi')"]],
   "eval": ["1 + 1"],
   "skip": true,
   "errskip": "stop",
@@ -337,24 +337,23 @@ develop 用户名@PC名 完整所在路径 $
 run（shell 命令）-> call（子配方）-> exec（Python 脚本）-> eval（Python 表达式）
 ```
 
-`exec` 是脚本列表，每个脚本是行列表，每行是片段列表：
+`exec` 是脚本列表，每个脚本是行列表，每行是一个 Python 源码字符串：
 
 ```json
 "exec": [
   [
-    ["import os"],
-    ["print(os.getcwd())"]
+    "import os",
+    "print(os.getcwd())"
   ],
   [
-    ["x = 1"],
-    ["y = x + 1"]
+    "x = 1",
+    "y = x + 1"
   ]
 ]
 ```
 
-* 每行的片段按空字符串直接拼接（如 `["x = ", 1]` -> `x = 1`），行与行之间用换行拼接；
-* 片段只能是字符串或数字；数字表示 `data` 下标，和 `run` 一样；
-* 每个脚本整体交给 Python 的 `exec()` 执行，脚本之间、脚本与 `eval` 之间共用命名空间。
+* 行与行之间用换行拼接，然后整体交给 Python 的 `exec()` 执行；
+* 脚本之间、脚本与 `eval` 之间共用命名空间。
 
 `eval` 是表达式列表，按顺序交给 Python 的 `eval()` 求值：
 
@@ -377,13 +376,12 @@ run（shell 命令）-> call（子配方）-> exec（Python 脚本）-> eval（P
 
 ```json
 {
-  "data": ["hello"],
   "jobs": {
     "main": {
       "steps": {
         "greet": {
           "exec": [
-            [["name = '", 0, "'"], ["print(name)"]]
+            ["name = 'hello'", "print(name)"]
           ],
           "eval": ["assert name == 'hello'"]
         }

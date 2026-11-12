@@ -449,29 +449,17 @@ class TestExecEval(RunnerTestCase):
     def test_exec_lines_and_shared_namespace(self):
         self.run_step(
             exec=[
-                [["import pathlib"], ["a = ", "1"], ["b = a + 1"]],
-                [["c = a + b"]],
+                ["import pathlib", "a = 1", "b = a + 1"],
+                ["c = a + b"],
             ],
             eval=["pathlib.Path('eval.txt').write_text(str(c))"],
         )
         self.assertEqual(_common.read(self.workdir / "eval.txt"), "3")
 
-    def test_exec_data_substitution(self):
-        self.run_raw({
-            "data": ["hello"],
-            "jobs": {"j": {"steps": {"s": {
-                "exec": [[
-                    ["import pathlib"],
-                    ["pathlib.Path('exec.txt').write_text('", 0, "')"],
-                ]],
-            }}}},
-        })
-        self.assertEqual(_common.read(self.workdir / "exec.txt"), "hello")
-
     def test_exec_runs_in_workdir(self):
         self.run_step(exec=[[
-            ["import pathlib"],
-            ["pathlib.Path('cwd.txt').write_text('ok')"],
+            "import pathlib",
+            "pathlib.Path('cwd.txt').write_text('ok')",
         ]])
         self.assertEqual(_common.read(self.workdir / "cwd.txt"), "ok")
 
@@ -485,9 +473,9 @@ class TestExecEval(RunnerTestCase):
         self.run_step(
             run=[echo_write("order.txt", "run")],
             exec=[[
-                ["import pathlib"],
-                ["p = pathlib.Path('order.txt')"],
-                ["p.write_text(p.read_text() + 'exec')"],
+                "import pathlib",
+                "p = pathlib.Path('order.txt')",
+                "p.write_text(p.read_text() + 'exec')",
             ]],
             eval=["p.write_text(p.read_text() + 'eval')"],
         )
@@ -495,12 +483,12 @@ class TestExecEval(RunnerTestCase):
         self.assertEqual("".join(content.split()), "runexeceval")
 
     def test_exec_failure_default_stop_marks_failed(self):
-        runner = self.run_step(exec=[[["raise ValueError('boom')"]]])
+        runner = self.run_step(exec=[["raise ValueError('boom')"]])
         self.assertTrue(runner.failed)
 
     def test_exec_failure_crash_raises(self):
         with self.assertRaisesRegex(StepError, r"(?s)exec\[1\].*ValueError"):
-            self.run_step(errskip="crash", exec=[[["raise ValueError('boom')"]]])
+            self.run_step(errskip="crash", exec=[["raise ValueError('boom')"]])
 
     def test_eval_failure_default_stop_marks_failed(self):
         runner = self.run_step(eval=["1 / 0"])
@@ -510,14 +498,10 @@ class TestExecEval(RunnerTestCase):
         with self.assertRaisesRegex(StepError, r"(?s)eval\[1\].*ZeroDivisionError"):
             self.run_step(errskip="crash", eval=["1 / 0"])
 
-    def test_exec_data_index_out_of_range(self):
-        with self.assertRaisesRegex(RecipeError, "越界"):
-            self.run_step(exec=[[[0]]])
-
     def test_dry_run_skips_exec_and_eval(self):
         runner = self.run_raw(
             {"jobs": {"j": {"steps": {"s": {
-                "exec": [[["open('exec.txt', 'w').write('x')"]]],
+                "exec": [["open('exec.txt', 'w').write('x')"]],
                 "eval": ["open('eval.txt', 'w').write('x')"],
             }}}}},
             dry_run=True,

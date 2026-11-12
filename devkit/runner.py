@@ -455,7 +455,6 @@ class RecipeRunner:
         step: Step,
         *,
         recipe: Recipe,
-        data: list[Any],
         cwd: Path,
     ) -> None:
         """执行步骤里的 ``exec`` 脚本和 ``eval`` 表达式（共用同一个命名空间）。"""
@@ -477,7 +476,7 @@ class RecipeRunner:
             os.chdir(cwd)
             try:
                 for index, script in enumerate(step.execs, 1):
-                    source = self._render_exec(script, data, recipe, step, index)
+                    source = "\n".join(script)
                     logger.info("  > exec[{}] ({} 行)", index, len(script))
                     logger.debug("{}", source)
                     try:
@@ -499,37 +498,6 @@ class RecipeRunner:
                     logger.debug("  < eval[{}] = {!r}", index, result)
             finally:
                 os.chdir(previous)
-
-    def _render_exec(
-        self,
-        script: tuple[tuple[Any, ...], ...],
-        data: list[Any],
-        recipe: Recipe,
-        step: Step,
-        index: int,
-    ) -> str:
-        """把 exec 的行/片段结构拼成 Python 源码。"""
-        lines: list[str] = []
-        for line in script:
-            parts: list[str] = []
-            for token in line:
-                if isinstance(token, bool) or not isinstance(token, int):
-                    parts.append(str(token))
-                    continue
-                if not 0 <= token < len(data):
-                    raise RecipeError(
-                        f"{recipe.path.name} 步骤 {step.name} exec[{index}]: "
-                        f"data 下标 {token} 越界 (data 共 {len(data)} 项)"
-                    )
-                value = data[token]
-                if value is None:
-                    raise RecipeError(
-                        f"{recipe.path.name} 步骤 {step.name} exec[{index}]: "
-                        f"data[{token}] 为 null，不能作为脚本片段"
-                    )
-                parts.append(str(value))
-            lines.append("".join(parts))
-        return "\n".join(lines)
 
     # ------------------------------------------------------------------ job
 
@@ -958,7 +926,7 @@ class RecipeRunner:
                 env=step_env,
             )
 
-        self._run_step_python(step, recipe=recipe, data=data, cwd=cwd)
+        self._run_step_python(step, recipe=recipe, cwd=cwd)
 
     # ----------------------------------------------------------------- 工具
 

@@ -360,12 +360,12 @@ class TestExecEvalParsing(unittest.TestCase):
 
     def test_exec_parsing(self):
         step = self._step(exec=[
-            [["a = 1"], ["print(a)"]],
-            [["b = ", 0], ["print(b)"]],
+            ["a = 1", "print(a)"],
+            ["b = a + 1", "print(b)"],
         ])
         self.assertEqual(step.execs, (
-            (("a = 1",), ("print(a)",)),
-            (("b = ", 0), ("print(b)",)),
+            ("a = 1", "print(a)"),
+            ("b = a + 1", "print(b)"),
         ))
 
     def test_exec_default_is_empty(self):
@@ -375,9 +375,9 @@ class TestExecEvalParsing(unittest.TestCase):
         for raw in (
             "print(1)",
             ["print(1)"],
-            [["print(1)"]],
-            [[["print(", ["1", ")"]]]],
-            [[[""]]],
+            [[["print(1)"]]],
+            [[""]],
+            [[1]],
         ):
             with self.subTest(raw=raw), self.assertRaises(RecipeError):
                 self._step(exec=raw)

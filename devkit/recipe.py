@@ -85,17 +85,16 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
 
 ``exec`` 和 ``eval`` 是步骤字段，与 ``run`` 平级。一个步骤里的执行顺序是
 ``run`` -> ``call`` -> ``exec`` -> ``eval``。``exec`` 是"脚本列表"：每个脚本是"行列表"，
-每一行又是"片段列表"，片段只能是字符串或数字（数字是 data 下标）；同一行的片段直接拼接，
-行与行之间用换行拼接，然后整体交给 Python ``exec``。``eval`` 是表达式列表，按顺序用
-Python ``eval`` 求值。同一个步骤里的 ``exec``/``eval`` 共用同一个命名空间，可使用表达式
-系统提供的 ``get_recipe_path()`` / ``get_system_info()`` 等函数；失败按该步骤的
-``errskip``/``forward`` 处理::
+每一行是一个 Python 源码字符串；行与行之间用换行拼接，然后整体交给 Python ``exec``。
+``eval`` 是表达式列表，按顺序用 Python ``eval`` 求值。同一个步骤里的 ``exec``/``eval``
+共用同一个命名空间，可使用表达式系统提供的 ``get_recipe_path()`` / ``get_system_info()``
+等函数；失败按该步骤的 ``errskip``/``forward`` 处理::
 
     "init": {
       "run": [["echo", "hi"]],
       "exec": [
-        [["x = 1"], ["print(x)"]],       # 第一个脚本: 两行
-        [["y = x + 1"], ["print(y)"]]    # 第二个脚本: 与上一个共用命名空间
+        ["x = 1", "print(x)"],       # 第一个脚本: 两行
+        ["y = x + 1", "print(y)"]    # 第二个脚本: 与上一个共用命名空间
       ],
       "eval": ["x + y", "print(x * y)"]  # 依次 eval
     }
@@ -381,14 +380,14 @@ class Step:
     绝对路径或工作区里的已有文件，就"可执行文件 + 参数"直接启动，否则各片段按
     空格拼成一条 shell 命令行。
 
-    ``exec`` 是 Python 脚本列表（脚本 -> 行 -> 片段），``eval`` 是 Python 表达式列表；
+    ``exec`` 是 Python 脚本列表（脚本 -> 行 -> 源码字符串），``eval`` 是 Python 表达式列表；
     两者在 ``run``/``call`` 之后执行，同一步骤内共用命名空间，失败按 ``errskip`` 处理。
     """
 
     name: str
     run: tuple[tuple[Any, ...], ...] = ()
     call: tuple[tuple[str, tuple[Any, ...]], ...] = ()
-    execs: tuple[tuple[tuple[Any, ...], ...], ...] = ()
+    execs: tuple[tuple[str, ...], ...] = ()
     evals: tuple[str, ...] = ()
     env: tuple[EnvEntry, ...] = ()
     area: tuple[EnvEntry, ...] | None = None
@@ -712,28 +711,24 @@ def _parse_run(raw: Any, where: str) -> tuple[tuple[Any, ...], ...]:
     return tuple(commands)
 
 
-def _parse_exec(raw: Any, where: str) -> tuple[tuple[tuple[Any, ...], ...], ...]:
-    """exec 是脚本列表: 每个脚本是行列表，每行是片段列表。"""
+def _parse_exec(raw: Any, where: str) -> tuple[tuple[str, ...], ...]:
+    """exec 是脚本列表: 每个脚本是行列表，每行是一个 Python 源码字符串。"""
     if raw is None:
         return ()
     if not isinstance(raw, list):
         raise RecipeError(f"{where} 必须是脚本列表")
-    scripts: list[tuple[tuple[Any, ...], ...]] = []
+    scripts: list[tuple[str, ...]] = []
     for script_index, script in enumerate(raw):
         script_where = f"{where}[{script_index}]"
         if not isinstance(script, list):
             raise RecipeError(f"{script_where} 必须是行列表")
-        lines: list[tuple[Any, ...]] = []
+        lines: list[str] = []
         for line_index, line in enumerate(script):
-            line_where = f"{script_where}[{line_index}]"
-            if not isinstance(line, list):
-                raise RecipeError(f"{line_where} 必须是片段列表")
-            for part in line:
-                if not _run_scalar(part):
-                    raise RecipeError(f"{line_where} 的元素必须是字符串或数字")
-                if isinstance(part, str) and not part:
-                    raise RecipeError(f"{line_where} 片段不能为空")
-            lines.append(tuple(line))
+            if not isinstance(line, str) or not line.strip():
+                raise RecipeError(
+                    f"{script_where}[{line_index}] 必须是非空字符串（一行 Python 源码）"
+                )
+            lines.append(line)
         scripts.append(tuple(lines))
     return tuple(scripts)
 
