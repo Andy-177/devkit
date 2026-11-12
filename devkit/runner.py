@@ -20,7 +20,7 @@
   -> ``unzip``（按列表顺序）-> ``unpack``（按列表顺序）-> ``pull``（按列表顺序）
   -> ``jobs``（按声明顺序逐个执行），没有集中式编排；
 * 步骤默认按声明顺序执行，控制字段（``skip``/``errskip``/``linkup``/``jump``/``next``/
-  ``if``）的语义见 ``devkit.recipe`` 的说明；失败等级 ``errskip``（``crash``/``stop``/
+  ``forward``）的语义见 ``devkit.recipe`` 的说明；失败等级 ``errskip``（``crash``/``stop``/
   ``proceed``/``skip``，缺省 ``stop``）决定失败的爆炸半径；
 * ``linkup`` 会把发起联动的步骤和被联动的步骤并发执行；联动组里任何一个步骤失败，
   按发起联动的那个步骤的 ``errskip`` 处理：``proceed`` 时联动的步骤继续跑完，
@@ -672,7 +672,7 @@ class RecipeRunner:
                     logger.error("步骤 {} 失败 (errskip:stop): 终止作业 {}", step.name, job.name)
                     raise JobStop(job.name, step.name, exc) from exc
                 self.failed = True
-                target = step.when.error or step.jump or jumps.get(step.name)
+                target = step.forward.error or step.jump or jumps.get(step.name)
                 if target is not None:
                     logger.error(
                         "步骤 {} 失败 (errskip:{}): 跳转到 {}", step.name, step.errskip, target
@@ -692,7 +692,7 @@ class RecipeRunner:
                     return None
                 logger.info("  > 步骤 {} 的 next: 切换到工作流 {}", step.name, step.next)
                 return step.next
-            target = step.when.success or step.jump or jumps.get(step.name)
+            target = step.forward.success or step.jump or jumps.get(step.name)
             if target is not None:
                 logger.info("  > 步骤 {} 跳转到 {}", step.name, target)
                 cursor = index_of[target]
@@ -722,25 +722,25 @@ class RecipeRunner:
         for step in steps:
             if step.jump is not None:
                 check_step(step.jump, f"步骤 {step.name} 的 jump")
-            if step.when.success is not None:
-                check_step(step.when.success, f"步骤 {step.name} 的 if.success")
-            if step.when.error is not None:
-                check_step(step.when.error, f"步骤 {step.name} 的 if.error")
+            if step.forward.success is not None:
+                check_step(step.forward.success, f"步骤 {step.name} 的 forward.success")
+            if step.forward.error is not None:
+                check_step(step.forward.error, f"步骤 {step.name} 的 forward.error")
             if step.next is not None and step.next != NEXT_JOB and step.next not in job_names:
                 raise RecipeError(
                     f"{where}: 步骤 {step.name} 的 next 引用了不存在的作业 {step.next!r}"
                 )
             for name in step.linkup:
                 check_step(name, f"步骤 {step.name} 的 linkup")
-            for src, dst in step.when.jump:
-                check_step(src, f"步骤 {step.name} 的 if.jump 键")
-                check_step(dst, f"步骤 {step.name} 的 if.jump 值")
+            for src, dst in step.forward.jump:
+                check_step(src, f"步骤 {step.name} 的 forward.jump 键")
+                check_step(dst, f"步骤 {step.name} 的 forward.jump 值")
                 if src in redirects:
                     raise RecipeError(f"{where}: {src!r} 同时出现在 jump 和 redirect 里，跳转冲突")
                 jumps[src] = dst
-            for src, dst in step.when.redirect:
-                check_step(src, f"步骤 {step.name} 的 if.redirect 键")
-                check_step(dst, f"步骤 {step.name} 的 if.redirect 值")
+            for src, dst in step.forward.redirect:
+                check_step(src, f"步骤 {step.name} 的 forward.redirect 键")
+                check_step(dst, f"步骤 {step.name} 的 forward.redirect 值")
                 if src in jumps:
                     raise RecipeError(f"{where}: {src!r} 同时出现在 jump 和 redirect 里，跳转冲突")
                 redirects[src] = dst

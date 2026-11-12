@@ -251,7 +251,7 @@ class TestStepControl(RunnerTestCase):
 
     def test_redirect_skips_source_step(self):
         path = simple_recipe(self.tmp, steps={
-            "s1": {"if": {"redirect": {"s1": "s3"}}, "run": [echo_write("s1.txt")]},
+            "s1": {"forward": {"redirect": {"s1": "s3"}}, "run": [echo_write("s1.txt")]},
             "s2": {"run": [echo_write("s2.txt")]},
             "s3": {"run": [echo_write("s3.txt")]},
         })
@@ -263,7 +263,7 @@ class TestStepControl(RunnerTestCase):
 
     def test_if_success_jump(self):
         path = simple_recipe(self.tmp, steps={
-            "s1": {"if": {"success": "s3"}, "run": [echo_write("s1.txt")]},
+            "s1": {"forward": {"success": "s3"}, "run": [echo_write("s1.txt")]},
             "s2": {"run": [echo_write("s2.txt")]},
             "s3": {"run": [echo_write("s3.txt")]},
         })
@@ -274,7 +274,7 @@ class TestStepControl(RunnerTestCase):
 
     def test_if_error_jump_with_proceed(self):
         path = simple_recipe(self.tmp, steps={
-            "s1": {"errskip": "proceed", "if": {"error": "s3"}, "run": [FAIL_CMD]},
+            "s1": {"errskip": "proceed", "forward": {"error": "s3"}, "run": [FAIL_CMD]},
             "s2": {"run": [echo_write("s2.txt")]},
             "s3": {"run": [echo_write("s3.txt")]},
         })
@@ -347,7 +347,7 @@ class TestStepControl(RunnerTestCase):
 
     def test_missing_if_target_raises(self):
         path = simple_recipe(self.tmp, steps={
-            "s": {"errskip": "proceed", "if": {"error": "ghost"},
+            "s": {"errskip": "proceed", "forward": {"error": "ghost"},
                   "run": [FAIL_CMD]},
         })
         runner = make_runner(self.workdir)

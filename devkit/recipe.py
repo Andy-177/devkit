@@ -91,12 +91,12 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
     "init": {
       "run": [...],
       "call": {...},
-      "skip": true,         # 顺序走到这个步骤时跳过它（被 jump/linkup/if 指到时仍然执行）
+      "skip": true,         # 顺序走到这个步骤时跳过它（被 jump/linkup/forward 指到时仍然执行）
       "errskip": "stop",    # 失败等级: crash/stop/proceed/skip（缺省 stop）
       "linkup": ["other"],  # 联动: 和 other 等步骤一起并发执行
       "jump": "step-x",     # 执行完这个步骤后跳转到 step-x
       "next": null,         # 切换作业: null=结束本作业继续下一个作业，"作业名"=跳到该作业
-      "if": {
+      "forward": {
         "error": "on-error",        # 失败后跳转到 on-error
         "success": "on-ok",         # 成功后跳转到 on-ok
         "jump": {"src": "dst"},     # 全局跳转表: src 执行完后跳转到 dst
@@ -104,7 +104,7 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
       }
     }
 
-* ``skip``/``linkup`` 只影响"顺序流过"：被 ``jump``/``if.success``/``if.error``/
+* ``skip``/``linkup`` 只影响"顺序流过"：被 ``jump``/``forward.success``/``forward.error``/
   ``linkup`` 明确指到的步骤照常执行。``linkup`` 指到的步骤如果没有 ``skip:true``，
   联动跑完后顺序走到它时会再执行一次；
 * 失败等级 ``errskip``（缺省 ``stop``，只能是 crash/stop/proceed/skip 之一）：
@@ -112,13 +112,13 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
   - ``stop``: 打印报错，终止当前作业，由所在作业的 ``errskip`` 决定最终收场；
   - ``proceed``: 只终止出错的步骤（联动的步骤继续跑完），再按去向跳转，作业继续；
   - ``skip``: 终止出错的步骤和它联动的步骤，再按去向跳转，作业继续；
-  - ``proceed``/``skip`` 的去向：``if.error`` > ``jump`` > 属于该步骤的 ``if.jump`` 边
-    > 顺序下一步（``if.error`` 优先级最高，只有它为空时才用 ``jump``）；
+  - ``proceed``/``skip`` 的去向：``forward.error`` > ``jump`` > 属于该步骤的 ``forward.jump`` 边
+    > 顺序下一步（``forward.error`` 优先级最高，只有它为空时才用 ``jump``）；
   - 被 errskip 处理掉的失败会让整个构建最终以非 0 退出码结束；
-* 成功后的去向优先级：``next`` > ``if.success`` > ``jump`` > ``if.jump``（属于该步骤的边）
+* 成功后的去向优先级：``next`` > ``forward.success`` > ``jump`` > ``forward.jump``（属于该步骤的边）
   > 顺序下一步；
-* ``if.jump``/``if.redirect`` 的键是"发出跳转的步骤"，值是目标步骤，在同一个作业内
-  生效；同一个步骤的 ``if`` 里两张表不能有相同的键，引用了不存在的步骤/作业都会报错；
+* ``forward.jump``/``forward.redirect`` 的键是"发出跳转的步骤"，值是目标步骤，在同一个作业内
+  生效；同一个步骤的 ``forward`` 里两张表不能有相同的键，引用了不存在的步骤/作业都会报错；
 * ``linkup`` 组里任何一个步骤失败，按发起联动的那个步骤的 ``errskip`` 处理：``proceed``
   时联动的步骤继续跑完，``skip``/``stop``/``crash`` 时整个组一起被终止。
 
@@ -238,11 +238,11 @@ _KNOWN_STEP_KEYS = {
     "linkup",
     "jump",
     "next",
-    "if",
+    "forward",
     "system",
     "expression",
 }
-_KNOWN_IF_KEYS = {"error", "success", "jump", "redirect"}
+_KNOWN_FORWARD_KEYS = {"error", "success", "jump", "redirect"}
 _KNOWN_ENV_KEYS = {"key", "value", "system"}
 
 
@@ -342,8 +342,8 @@ class EnvEntry:
 
 
 @dataclass(frozen=True)
-class StepIf:
-    """步骤的 ``if``：失败/成功后的去向，以及全局跳转/重定向表。"""
+class StepForward:
+    """步骤的 ``forward``：失败/成功后的去向，以及全局跳转/重定向表。"""
 
     error: str | None = None
     success: str | None = None
@@ -371,7 +371,7 @@ class Step:
     linkup: tuple[str, ...] = ()
     jump: str | None = None
     next: str | None = None
-    when: StepIf = StepIf()
+    forward: StepForward = StepForward()
     system: str | None = None
     expression: bool | tuple[str, ...] | None = None
 
@@ -769,12 +769,12 @@ def _parse_name_map(raw: Any, where: str) -> tuple[tuple[str, str], ...]:
     return tuple(pairs)
 
 
-def _parse_step_if(raw: Any, where: str) -> StepIf:
+def _parse_forward(raw: Any, where: str) -> StepForward:
     if raw is None:
-        return StepIf()
+        return StepForward()
     if not isinstance(raw, dict):
         raise RecipeError(f"{where} 必须是对象")
-    _warn_unknown(raw, _KNOWN_IF_KEYS, where)
+    _warn_unknown(raw, _KNOWN_FORWARD_KEYS, where)
     jumps = _parse_name_map(raw.get("jump"), f"{where}.jump")
     redirects = _parse_name_map(raw.get("redirect"), f"{where}.redirect")
     clash = {src for src, _ in jumps} & {src for src, _ in redirects}
@@ -782,7 +782,7 @@ def _parse_step_if(raw: Any, where: str) -> StepIf:
         raise RecipeError(
             f"{where}: {', '.join(sorted(clash))} 同时出现在 jump 和 redirect 里，跳转冲突"
         )
-    return StepIf(
+    return StepForward(
         error=_parse_step_name(raw.get("error"), f"{where}.error"),
         success=_parse_step_name(raw.get("success"), f"{where}.success"),
         jump=jumps,
@@ -824,7 +824,9 @@ def _parse_steps(raw: Any, where: str) -> tuple[Step, ...]:
                 linkup=linkup,
                 jump=_parse_step_name(body.get("jump"), f"{step_where}.jump"),
                 next=_parse_next(body.get("next"), f"{step_where}.next", "next" in body),
-                when=_parse_step_if(body.get("if"), f"{step_where}.if"),
+                forward=_parse_forward(
+                    body.get("forward"), f"{step_where}.forward"
+                ),
                 system=system,
                 expression=_parse_expression(body.get("expression"), f"{step_where}.expression"),
             )

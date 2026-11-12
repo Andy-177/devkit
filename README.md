@@ -305,7 +305,7 @@ develop 用户名@PC名 完整所在路径 $
   "linkup": ["other-step"],
   "jump": "step-x",
   "next": null,
-  "if": {
+  "forward": {
     "error": "on-error",
     "success": "on-ok",
     "jump": {"src": "dst"},
@@ -314,13 +314,13 @@ develop 用户名@PC名 完整所在路径 $
 }
 ```
 
-* `skip`：顺序走到时跳过；被 `jump`/`if`/`linkup`/`next` 明确指到时照常执行
+* `skip`：顺序走到时跳过；被 `jump`/`forward`/`linkup`/`next` 明确指到时照常执行
 * `errskip`（步骤缺省 `stop`）：
   * `crash` — 整个构建立即中止，透传退出码
   * `stop` — 终止当前作业，交作业级 errskip 收场
   * `proceed` / `skip` — 终止出错步骤，按去向跳转，作业继续
-* 成功去向优先级：`next` > `if.success` > `jump` > `if.jump` > 顺序下一步
-* 失败去向（proceed/skip）：`if.error` > `jump` > `if.jump` > 顺序下一步
+* 成功去向优先级：`next` > `forward.success` > `jump` > `forward.jump` > 顺序下一步
+* 失败去向（proceed/skip）：`forward.error` > `jump` > `forward.jump` > 顺序下一步
 * `next`：`null` 结束本作业；作业名切换到该作业
 * `linkup`：与被指步骤并发执行；组内失败按发起方的 errskip 处理
 * `call`：相对本配方文件的路径（文件或目录，目录按

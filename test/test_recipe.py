@@ -368,27 +368,31 @@ class TestStepControlFields(unittest.TestCase):
         self.assertEqual(s.linkup, ())
         self.assertIsNone(s.jump)
         self.assertIsNone(s.next)
-        self.assertIsNone(s.when.error)
-        self.assertIsNone(s.when.success)
-        self.assertEqual(s.when.jump, ())
-        self.assertEqual(s.when.redirect, ())
+        self.assertIsNone(s.forward.error)
+        self.assertIsNone(s.forward.success)
+        self.assertEqual(s.forward.jump, ())
+        self.assertEqual(s.forward.redirect, ())
 
     def test_all_fields(self):
         s = self._step({
             "run": [["x"]], "skip": True, "errskip": "proceed",
             "linkup": ["t"], "jump": "u", "next": "job-b",
-            "if": {"error": "e", "success": "ok",
-                   "jump": {"a": "b"}, "redirect": {"c": "d"}},
+            "forward": {"error": "e", "success": "ok",
+                        "jump": {"a": "b"}, "redirect": {"c": "d"}},
         }, extra={"t": {"run": [["y"]]}})
         self.assertTrue(s.skip)
         self.assertEqual(s.errskip, "proceed")
         self.assertEqual(s.linkup, ("t",))
         self.assertEqual(s.jump, "u")
         self.assertEqual(s.next, "job-b")
-        self.assertEqual(s.when.error, "e")
-        self.assertEqual(s.when.success, "ok")
-        self.assertEqual(s.when.jump, (("a", "b"),))
-        self.assertEqual(s.when.redirect, (("c", "d"),))
+        self.assertEqual(s.forward.error, "e")
+        self.assertEqual(s.forward.success, "ok")
+        self.assertEqual(s.forward.jump, (("a", "b"),))
+        self.assertEqual(s.forward.redirect, (("c", "d"),))
+
+    def test_old_if_key_ignored(self):
+        s = self._step({"if": {"success": "t"}, "run": [["x"]]}, extra={"t": {}})
+        self.assertIsNone(s.forward.success)
 
     def test_next_null_means_next_job(self):
         s = self._step({"run": [["x"]], "next": None})
@@ -416,11 +420,11 @@ class TestStepControlFields(unittest.TestCase):
 
     def test_jump_and_redirect_clash(self):
         with self.assertRaisesRegex(RecipeError, "跳转冲突"):
-            self._step({"if": {"jump": {"a": "b"}, "redirect": {"a": "c"}}})
+            self._step({"forward": {"jump": {"a": "b"}, "redirect": {"a": "c"}}})
 
     def test_jump_map_must_be_strings(self):
         with self.assertRaises(RecipeError):
-            self._step({"if": {"jump": {"a": 1}}})
+            self._step({"forward": {"jump": {"a": 1}}})
 
     def test_bad_next(self):
         with self.assertRaises(RecipeError):
