@@ -144,7 +144,7 @@ venv\Scripts\pyinstaller.exe -D -c -n devkit -y --clean -p . --copy-metadata lit
             ["echo hello > out.txt"]
           ],
           "env": [{"key": "CC", "value": "gcc"}],
-          "call": {"hello.json": ["hello"]}
+          "call": {"hello.json": {"var": "hello"}}
         }
       }
     }
@@ -281,25 +281,33 @@ develop 用户名@PC名 完整所在路径 $
 
 ### run 与 data
 
-`run` 永远是双层列表：第一层是命令列表（按位置定顺序），第二层是一条命令，
-元素只能是字符串或数字，数字表示 `data` 中对应下标：
+`run` 永远是双层列表：第一层是命令列表（按位置定顺序），第二层是一条命令。
+命令元素可以是字符串、数字或引用对象：
 
 ```json
-"run": [["echo", 0, ">", "out.txt"], ["echo", "second command"]]
+"data": ["build.sh", "debug"],
+"run": [
+  ["buildsh.bat", 0, ">", "out.txt"],
+  ["buildsh.bat", {"data": 1}]
+]
 ```
+
+* 数字是 `data` 的下标简写；`{"data": 0}` 是同一件事的显式写法；
+* `{"params": "名字"}` 引用 `invoke` 传入的参数；
+* `{"global": "名字"}` 引用 `call` 传入的参数；
+* `params` 和 `global` 互不相通，`params` 只对当前被 `invoke` 的步骤可见，
+  `global` 会沿 `call` 链继承（同名覆盖）；
+* `data` 只保存常量数据，不再接收 `call` 参数。
 
 所有命令一律拼成一行字符串交给系统 shell（Windows 为 cmd，POSIX 为 `/bin/sh`），
 管道、重定向、`&&` 均可用。失败按非 0 退出码判定。
-
-`data` 中的整数在顶层配方里是普通数据；被 `call` 调用的配方里则是入参占位符
-（"取 call 参数列表第 N 个"）。
 
 ### 步骤控制字段（全部可选）
 
 ```json
 "step-name": {
   "run": [...],
-  "call": {"child.json": ["arg"]},
+  "call": {"child.json": {"var": "hello"}},
   "exec": [["print('hi')"]],
   "eval": ["1 + 1"],
   "skip": true,
@@ -308,24 +316,34 @@ develop 用户名@PC名 完整所在路径 $
   "jump": "step-x",
   "next": null,
   "forward": {
-    "error": "on-error",
-    "success": "on-ok",
     "jump": {"src": "dst"},
-    "redirect": {"src": "dst"}
-  }
+    "redirect": {"src": "dst"},
+    "back": ["step-c"],
+    "reback": ["step-d"]
+  },
+  "trigger": {
+    "success": {"jump": "on-ok"},
+    "error": {"invoke": "recover"}
+  },
+  "switch": {
+    "selector": "1 + 1",
+    "case": {"2": {"jump": "two"}}
+  },
+  "invoke": {"step": "step-e", "params": {"var": "hello"}}
 }
 ```
 
-* `skip`：顺序走到时跳过；被 `jump`/`forward`/`linkup`/`next` 明确指到时照常执行
+* `skip`：顺序走到时跳过；被 `jump`/`forward`/`trigger`/`switch`/`invoke`/`linkup`/`next`
+  明确指到时照常执行
 * `errskip`（步骤缺省 `stop`）：
   * `crash` — 整个构建立即中止，透传退出码
   * `stop` — 终止当前作业，交作业级 errskip 收场
   * `proceed` / `skip` — 终止出错步骤，按去向跳转，作业继续
 * `next`：`null` 结束本作业；作业名切换到该作业
 * `linkup`：与被指步骤并发执行；组内失败按发起方的 errskip 处理
-* `call`：相对本配方文件的路径（文件或目录，目录按
-  `recipe.json` 查找）；被调配方有 clone 时在工作区下
-  以配方名开子目录，否则共用父工作区；循环调用会报错
+* `call`：`{相对本配方文件的路径: {参数名: 值}}`；路径可以是文件或目录（目录按
+  `recipe.json` 查找）；被调配方有 clone 时在工作区下以配方名开子目录，否则共用父工作区；
+  循环调用会报错。子配方用 `{"global": "参数名"}` 引用参数
 * `exec` / `eval`：步骤里的 Python 脚本 / 表达式，在 `run` 和 `call` 之后执行；
   详见下面的 exec / eval 小节
 
@@ -368,7 +386,7 @@ run（shell 命令）-> call（子配方）-> exec（Python 脚本）-> eval（P
 * 每次 `exec`/`eval` 的命名空间都包含完整 builtins，以及表达式系统的 `get_recipe_path()` /
   `get_recipe_name()` / `get_workdir_path()` / `get_workdir_name()` / `get_system_info()`；
 * 执行时当前目录会临时切到该步骤的工作区，脚本里的相对路径按工作区解析；
-* `exec`/`eval` 抛异常时，按该步骤的 `errskip` / `forward` 处理，错误信息里带完整 traceback；
+* `exec`/`eval` 抛异常时，按该步骤的 `errskip` / `trigger` / `forward` 处理，错误信息里带完整 traceback；
 * `--dry-run` 只打印日志，不执行 `exec`/`eval`。
 
 例如：
@@ -391,45 +409,89 @@ run（shell 命令）-> call（子配方）-> exec（Python 脚本）-> eval（P
 }
 ```
 
-#### forward：控制步骤执行后的去向
+#### forward：纯转发规则表
 
-不写 `forward` 时，步骤执行完就按声明顺序走到下一个步骤。`forward` 用来改变这个去向，
-它只影响**当前作业内部**的步骤，包含四个可选字段：
+`forward` 不再包含成功/失败回调，它是一张作业内的转发规则表，只影响**当前作业内部**
+的步骤。成功/失败后的动作由 `trigger` 负责，按值分支由 `switch` 负责。
 
 | 字段 | 类型 | 作用 |
 |---|---|---|
-| `success` | 步骤名 | 当前步骤成功后，跳转到指定步骤 |
-| `error` | 步骤名 | 当前步骤失败且 `errskip` 为 `proceed`/`skip` 时，跳转到指定步骤 |
-| `jump` | `{源步骤: 目标步骤}` | 跳转表：当前作业里某个步骤正常执行完后，跳到目标步骤 |
-| `redirect` | `{源步骤: 目标步骤}` | 重定向表：顺序走到源步骤时不执行它，直接跳到目标步骤 |
+| `jump` | `{源步骤: 目标步骤}` | 源步骤正常执行完后，跳到目标步骤 |
+| `redirect` | `{源步骤: 目标步骤}` | 顺序走到源步骤时不执行它，直接跳到目标步骤 |
+| `back` | `[源步骤, ...]` | 写在目标步骤 X 上：列出的源步骤执行完后跳回 X，等价于 `jump` 里的 `{源: X}` |
+| `reback` | `[源步骤, ...]` | 写在目标步骤 X 上：走到列出的源步骤时不执行、直接跳回 X，等价于 `redirect` 里的 `{源: X}` |
 
-`success`/`error` 只属于声明它们的那个步骤；`jump`/`redirect` 是一张作业内的表，
-键是"源步骤"，值是"目标步骤"，会被汇总后统一生效。
+`jump`/`redirect`/`back`/`reback` 会被汇总成两张表统一生效：`jump`（含 `back`）是
+"执行完再走"，`redirect`（含 `reback`）是"不执行直接走"。
 
-简单理解：`success`/`error` 是"这个步骤之后去哪"；`jump`/`redirect` 是"在这个作业里
-登记一条路线"。`jump` 在源步骤正常结束后生效，`redirect` 在顺序走到源步骤时直接绕开它。
+#### trigger：成功/失败后的动作
 
-**去向优先级**
+```json
+"trigger": {
+  "success": {"jump": "on-ok"},
+  "error": {"invoke": "recover"}
+}
+```
 
-* 步骤成功后：`next` > `forward.success` > 步骤自己的 `jump` > `forward.jump` 里以该步骤为源的边
-  > 顺序下一步。
-* 步骤失败且 `errskip` 为 `proceed`/`skip` 时：`forward.error` > 步骤自己的 `jump`
-  > `forward.jump` 里以该步骤为源的边 > 顺序下一步。
-* `errskip` 为 `crash`/`stop` 时不会使用 `forward.error`，而是直接中止（`crash`）
+* `success`：步骤成功后执行；
+* `error`：步骤失败且 `errskip` 为 `proceed`/`skip` 时执行；`crash`/`stop` 不执行它，
+  直接中止或终止作业；
+* 每个动作对象只能有 `jump` 或 `invoke` 之一。
+
+#### switch：按值分支
+
+```json
+"switch": {
+  "selector": "1 + 1",
+  "case": {
+    "2": {"jump": "two"},
+    "3": {"invoke": "three"}
+  }
+}
+```
+
+* `selector` 可以是 Python 表达式字符串，也可以是 `{"data": 0}` /
+  `{"params": "x"}` / `{"global": "x"}` 引用；
+* 步骤成功后求值，结果转成字符串后与 `case` 的键比较，命中则执行对应动作；
+* 表达式里可用完整 builtins、表达式系统的辅助函数，以及 `data` / `params` / `globals`
+  三个变量；未知的裸名字按字面字符串处理（所以 `"selector": "hello"` 能匹配
+  `"case": {"hello": ...}`）；
+* `selector` 求值失败会打印完整 traceback 并强制终止整个工作流，不受 `errskip` 影响；
+* 未命中时继续看 `trigger.success` / `invoke` / `jump` / 顺序下一步。
+
+#### invoke：步骤级调用
+
+```json
+"invoke": "step-e"
+"invoke": {"step": "step-e", "params": {"var": "hello"}}
+```
+
+* 当前步骤成功后执行目标步骤，目标步骤执行完再回到当前步骤的下一步；
+* `params` 只对目标步骤可见，用 `{"params": "名字"}` 在 `run` 里引用；
+* `invoke` 可以嵌套；`switch`/`trigger` 里的 `invoke` 语义相同。
+
+#### 去向优先级
+
+* 步骤成功后：`next` > `switch` 命中的 case > `trigger.success` > `invoke` >
+  步骤自己的 `jump` > `forward.jump`/`back` 里以该步骤为源的边 > 顺序下一步。
+* 步骤失败且 `errskip` 为 `proceed`/`skip` 时：`trigger.error` > 步骤自己的 `jump`
+  > `forward.jump`/`back` 里以该步骤为源的边 > 顺序下一步。
+* `errskip` 为 `crash`/`stop` 时不会使用 `trigger.error`，而是直接中止（`crash`）
   或终止当前作业（`stop`）。
 
 **和 skip / system 的关系**
 
-* 被 `forward.success`、`forward.error`、`forward.jump` 或 `forward.redirect` 明确指到的步骤，
+* 被 `jump`/`redirect`/`back`/`reback`/`trigger`/`switch`/`invoke` 明确指到的步骤，
   这一次会立即执行，即使它写了 `skip: true`；如果之后又按顺序走到它，仍然遵守 `skip`。
-* `redirect` 在 `skip` 和 `system` 判断之前生效：即使源步骤写了 `skip: true` 或系统不匹配，
-  顺序走到它时也会被重定向，不会执行源步骤。
+* `redirect`/`reback` 在 `skip` 和 `system` 判断之前生效：即使源步骤写了 `skip: true`
+  或系统不匹配，顺序走到它时也会被重定向，不会执行源步骤。
 
 **约束**
 
-* `jump`/`redirect` 只能引用当前作业里存在的步骤；`success`/`error` 同理。
-* 同一个源步骤不能同时出现在 `jump` 和 `redirect` 里，否则会报"跳转冲突"。
-* 跳转目标是步骤名，不是作业名；要切换作业请用 `next`。
+* `jump`/`redirect`/`back`/`reback`/`trigger`/`switch`/`invoke` 只能引用当前作业里
+  存在的步骤；`next` 引用作业名。
+* 同一个源步骤不能同时出现在"执行后跳转"（`jump`/`back`）和"不执行直接跳转"
+  （`redirect`/`reback`）里，否则会报"跳转冲突"。
 
 **示例**
 
@@ -437,22 +499,29 @@ run（shell 命令）-> call（子配方）-> exec（Python 脚本）-> eval（P
 "steps": {
   "build": {
     "run": [["build"]],
-    "forward": { "success": "test", "error": "report" }
+    "trigger": {"success": {"jump": "test"}, "error": {"jump": "report"}}
   },
   "test": {
     "run": [["test"]],
-    "forward": { "jump": { "test": "package" } }
+    "switch": {
+      "selector": {"global": "mode"},
+      "case": {
+        "release": {"invoke": "package"},
+        "debug": {"jump": "report"}
+      }
+    }
   },
-  "package": { "run": [["package"]] },
-  "report": { "run": [["report"]], "skip": true }
+  "package": {"run": [["package"]]},
+  "report": {"run": [["report"]], "skip": true}
 }
 ```
 
-* `build` 成功 -> 执行 `test`；`build` 失败且 `errskip` 为 `proceed`/`skip` -> 执行 `report`
-  （`report` 虽然 `skip: true`，但被 `forward.error` 明确指到，所以这次会执行）。
-* `test` 成功 -> 执行 `package`。
-* 如果把 `test` 的 `forward.jump` 改成 `"redirect": { "test": "package" }`，则顺序走到 `test`
-  时不会执行 `test`，而是直接执行 `package`。
+* `build` 成功 -> 执行 `test`；失败且 `errskip` 为 `proceed`/`skip` -> 执行 `report`
+  （`report` 虽然 `skip: true`，但被 `trigger.error` 明确指到，所以这次会执行）。
+* `test` 成功且 `global.mode == "release"` -> `invoke` 执行 `package`，`package`
+  执行完回到 `test` 的下一步；`debug` -> 跳到 `report`。
+* 如果把 `test` 的 `forward` 写成 `{"redirect": {"test": "package"}}`，则顺序走到
+  `test` 时不会执行 `test`，而是直接执行 `package`。
 
 ### 作业（jobs）
 
@@ -484,17 +553,20 @@ run（shell 命令）-> call（子配方）-> exec（Python 脚本）-> eval（P
 父配方：
 
 ```json
-{"steps": {"s": {"call": {"hello.json": ["hello"]}}}}
+{"steps": {"s": {"call": {"hello.json": {"var": "hello"}}}}}
 ```
 
 子配方 `hello.json`：
 
 ```json
 {
-  "data": ["hi", 0],
-  "jobs": {"print": {"steps": {"s": {"run": [["echo", 1]]}}}}
+  "data": ["hi"],
+  "jobs": {"print": {"steps": {"s": {"run": [["echo", 0], ["echo", {"global": "var"}]]}}}}
 }
 ```
+
+`data` 只作为子配方的常量数据；`call` 传入的参数用 `{"global": "参数名"}` 引用，
+并会继续继承给更深层的 `call`（同名覆盖）。
 
 调用后 `data` 变为 `["hi", "hello"]`，`echo 1` 输出 `hello`。
 

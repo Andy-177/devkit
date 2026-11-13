@@ -71,13 +71,17 @@ class TestRepoRecipes(unittest.TestCase):
         self.assertIn("全部完成", proc.stderr)
 
     def test_hello_recipe_real_execution(self):
-        """example/hello.json 真实执行（纯 echo，无网络），参数经 call data 绑定。"""
+        """example/hello.json 真实执行（纯 echo，无网络），参数经 call 传参。"""
         self._require(HELLO_RECIPE)
         with tempfile.TemporaryDirectory() as td:
-            proc = run_cli("build", str(HELLO_RECIPE), "-w", td, cwd=ROOT)
+            wrapper = _common.write_recipe(Path(td), {
+                "jobs": {"main": {"steps": {"s": {
+                    "call": {str(HELLO_RECIPE): {"var": "world"}}}}}},
+            }, "wrap.json")
+            proc = run_cli("build", str(wrapper), "-w", td, cwd=ROOT)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("hi", proc.stdout)      # data[0] = "hi"
-        self.assertIn("0", proc.stdout)       # data[1] 占位符（顶层配方里是普通数据）
+        self.assertIn("world", proc.stdout)   # call 传入的 global 参数
         self.assertIn("全部完成", proc.stderr)
 
     def test_dry_run_creates_nothing_in_cwd(self):

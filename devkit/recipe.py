@@ -46,7 +46,7 @@
               ],
               "env": [{"key": "CC", "value": "gcc"}],  # 再覆盖合并到 job 的 env 上
               "call": {
-                "hello.json": ["hello"]   # 相对本配方文件的路径 + 传入的参数列表
+                "hello.json": {"var": "hello"}   # 相对本配方文件的路径 + 参数对象
               }
             }
           }
@@ -73,8 +73,9 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
 
     "run": [["echo a"]]               # 一条命令
 
-第二层列表是一条命令，里面的元素只能是字符串或数字（数字是 data 下标）。运行时
-先做替换，然后按下面的规则解析成一条命令：
+第二层列表是一条命令，里面的元素可以是字符串、数字（data 下标），或引用对象
+``{"data": 下标}`` / ``{"params": 名字}`` / ``{"global": 名字}``。运行时先做替换，
+然后按下面的规则解析成一条命令：
 
 * 第一个片段是绝对路径，或者能在工作区里找到同名文件 -> 当作"可执行文件 + 参数"
   直接启动（不走 shell）；
@@ -88,7 +89,7 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
 每一行是一个 Python 源码字符串；行与行之间用换行拼接，然后整体交给 Python ``exec``。
 ``eval`` 是表达式列表，按顺序用 Python ``eval`` 求值。每个脚本、每个表达式都是**独立的**
 ``exec``/``eval`` 调用，命名空间互不共享；可使用表达式系统提供的 ``get_recipe_path()`` /
-``get_system_info()`` 等函数。失败按该步骤的 ``errskip``/``forward`` 处理::
+``get_system_info()`` 等函数。失败按该步骤的 ``errskip``/``trigger``/``forward`` 处理::
 
     "init": {
       "run": [["echo", "hi"]],
@@ -106,37 +107,70 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
 
     "init": {
       "run": [...],
-      "call": {...},
+      "call": {"child.json": {"var": "hello"}},  # 调用子配方，参数用 {"global": "var"} 引用
       "exec": [...],        # Python 脚本列表（在 run/call 之后执行）
       "eval": [...],        # Python 表达式列表（在 exec 之后执行）
-      "skip": true,         # 顺序走到这个步骤时跳过它（被 jump/linkup/forward 指到时仍然执行）
+      "skip": true,         # 顺序走到这个步骤时跳过它（被 jump/linkup/forward/trigger/switch/invoke 指到时仍然执行）
       "errskip": "stop",    # 失败等级: crash/stop/proceed/skip（缺省 stop）
       "linkup": ["other"],  # 联动: 和 other 等步骤一起并发执行
       "jump": "step-x",     # 执行完这个步骤后跳转到 step-x
       "next": null,         # 切换作业: null=结束本作业继续下一个作业，"作业名"=跳到该作业
       "forward": {
-        "error": "on-error",        # 失败后跳转到 on-error
-        "success": "on-ok",         # 成功后跳转到 on-ok
-        "jump": {"src": "dst"},     # 全局跳转表: src 执行完后跳转到 dst
-        "redirect": {"src": "dst"}  # 全局重定向表: 走到 src 时不执行它，直接跳到 dst
-      }
+        "jump": {"src": "dst"},      # 跳转表: src 执行完后跳转到 dst
+        "redirect": {"src": "dst"},  # 重定向表: 走到 src 时不执行它，直接跳到 dst
+        "back": ["src"],             # 写在目标步骤 X 上: src 执行完后跳回 X
+        "reback": ["src"]            # 写在目标步骤 X 上: 走到 src 时不执行，直接跳回 X
+      },
+      "trigger": {
+        "success": {"jump": "on-ok"},    # 成功后跳到 on-ok
+        "error": {"invoke": "recover"}   # 失败（proceed/skip）后调用 recover
+      },
+      "switch": {
+        "selector": "1 + 1",             # Python 表达式，或 {"data":0}/{"params":"x"}/{"global":"x"}
+        "case": {
+          "2": {"jump": "two"},          # selector 结果转成字符串后匹配 case 的键
+          "3": {"invoke": "three"}
+        }
+      },
+      "invoke": "step-e"     # 本步骤成功后调用 step-e，step-e 执行完回到本步骤的下一步
     }
 
-* ``skip``/``linkup`` 只影响"顺序流过"：被 ``jump``/``forward.success``/``forward.error``/
-  ``linkup`` 明确指到的步骤照常执行。``linkup`` 指到的步骤如果没有 ``skip:true``，
-  联动跑完后顺序走到它时会再执行一次；
+* ``run`` 的每个元素可以是字符串、数字（``data`` 下标），或引用对象
+  ``{"data": 下标}`` / ``{"params": 名字}`` / ``{"global": 名字}``；
+  ``params`` 来自 ``invoke`` 传参，``global`` 来自 ``call`` 传参，两者互不相通；
+* ``call`` 的格式是 ``{"相对路径": {"参数名": 值}}``；子配方用 ``{"global": "参数名"}``
+  引用，``data`` 只作为子配方的常量数据，不再接收 ``call`` 参数；``call`` 参数会
+  继承给更深层的 ``call``（同名覆盖）；
+* ``skip``/``linkup`` 只影响"顺序流过"：被 ``jump``/``forward``/``trigger``/``switch``/
+  ``invoke``/``linkup`` 明确指到的步骤照常执行。``linkup`` 指到的步骤如果没有
+  ``skip:true``，联动跑完后顺序走到它时会再执行一次；
 * 失败等级 ``errskip``（缺省 ``stop``，只能是 crash/stop/proceed/skip 之一）：
   - ``crash``: 打印报错，整个构建立即中止（不理会作业级的 errskip）；
   - ``stop``: 打印报错，终止当前作业，由所在作业的 ``errskip`` 决定最终收场；
   - ``proceed``: 只终止出错的步骤（联动的步骤继续跑完），再按去向跳转，作业继续；
   - ``skip``: 终止出错的步骤和它联动的步骤，再按去向跳转，作业继续；
-  - ``proceed``/``skip`` 的去向：``forward.error`` > ``jump`` > 属于该步骤的 ``forward.jump`` 边
-    > 顺序下一步（``forward.error`` 优先级最高，只有它为空时才用 ``jump``）；
+  - ``proceed``/``skip`` 的去向：``trigger.error`` > ``jump`` > 属于该步骤的
+    ``forward.jump``/``back`` 边 > 顺序下一步；
+  - ``crash``/``stop`` 不会执行 ``trigger.error``，直接中止或终止作业；
   - 被 errskip 处理掉的失败会让整个构建最终以非 0 退出码结束；
-* 成功后的去向优先级：``next`` > ``forward.success`` > ``jump`` > ``forward.jump``（属于该步骤的边）
-  > 顺序下一步；
-* ``forward.jump``/``forward.redirect`` 的键是"发出跳转的步骤"，值是目标步骤，在同一个作业内
-  生效；同一个步骤的 ``forward`` 里两张表不能有相同的键，引用了不存在的步骤/作业都会报错；
+* 成功后的去向优先级：``next`` > ``switch`` 命中的 case > ``trigger.success`` >
+  ``invoke`` > ``jump`` > 属于该步骤的 ``forward.jump``/``back`` 边 > 顺序下一步；
+* ``trigger.success``/``trigger.error`` 和 ``switch`` 的 case 都是"动作对象"，每个动作
+  只能有 ``jump`` 或 ``invoke`` 之一；``jump`` 的目标是当前作业里的步骤名；
+* ``invoke`` 是步骤级调用：当前步骤成功后执行目标步骤，目标步骤执行完再回到当前
+  步骤的下一步；``invoke`` 可以嵌套，``params`` 只对目标步骤可见。``switch``/
+  ``trigger`` 里的 ``invoke`` 语义相同；
+* ``switch.selector`` 是字符串时按 Python 表达式求值（完整 builtins，另含表达式系统的
+  辅助函数和 ``data``/``params``/``globals`` 三个变量）；求值结果转成字符串后与
+  ``case`` 的键比较。未知的裸名字按字面字符串处理，因此 ``"selector": "hello"``
+  可以匹配 ``"case": {"hello": ...}``。selector 也可以直接写引用对象；selector
+  求值失败会强制终止整个工作流，不受 ``errskip`` 影响；
+* ``forward.back``/``forward.reback`` 写在"要跳回的目标步骤"上，列表里是触发回跳的
+  步骤：``back`` 在列出的步骤执行完后跳回声明它的步骤，``reback`` 在走到列出的步骤
+  时不执行、直接跳回声明它的步骤；
+* ``forward.jump``/``forward.redirect``/``back``/``reback`` 在同一个作业内汇总生效；
+  同一个源步骤不能同时出现在"执行后跳转"和"不执行直接跳转"两类规则里，引用了不存在
+  的步骤/作业都会报错；
 * ``linkup`` 组里任何一个步骤失败，按发起联动的那个步骤的 ``errskip`` 处理：``proceed``
   时联动的步骤继续跑完，``skip``/``stop``/``crash`` 时整个组一起被终止。
 
@@ -192,13 +226,12 @@ download/unzip/unpack 语法一致，都是"字符串简写"或"对象项"（``s
 顶层 ``area`` 的用处是让子配方**不接受**从调用方继承来的环境：子配方一旦在顶层写了
 ``area``，就只用自己的 area。
 
-data 里出现整数时，含义取决于配方如何被使用：
+``data`` 只保存常量数据，不再接收 ``call`` 参数。``run`` 里可以用数字下标或
+``{"data": 下标}`` 引用它；被 ``call`` 调用的子配方用自己的 ``data``，``call`` 参数
+通过 ``{"global": "参数名"}`` 访问::
 
-* 顶层配方: 整数是普通数据，``run`` 中用下标引用它；
-* 被 ``call`` 调用的配方: 整数是入参占位符，表示"取 call 参数列表中第 N 个"。
-  例如 ``hello.json`` 的 ``data`` 是 ``["hi", 0]``，``0`` 位于下标 1，
-  被 ``call: {"hello.json": ["hello"]}`` 调用后 data 变成 ``["hi", "hello"]``,
-  于是 ``run: [["echo", 1]]`` 输出的就是传入的 ``hello``。
+    "data": ["build.sh", "debug"],
+    "run": [["buildsh.bat", {"data": 1}]]
 
 ``expression`` 字段可写在顶层、作业、步骤三处（默认关闭），打开后任意字符串里
 的 ``?!{{python_expression}}`` 会在运行时求值（完整 builtins，另含
@@ -259,11 +292,21 @@ _KNOWN_STEP_KEYS = {
     "jump",
     "next",
     "forward",
+    "switch",
+    "trigger",
+    "invoke",
     "system",
     "expression",
 }
-_KNOWN_FORWARD_KEYS = {"error", "success", "jump", "redirect"}
+_KNOWN_FORWARD_KEYS = {"jump", "redirect", "back", "reback"}
+_KNOWN_TRIGGER_KEYS = {"success", "error"}
+_KNOWN_ACTION_KEYS = {"jump", "invoke"}
+_KNOWN_SWITCH_KEYS = {"selector", "case"}
+_KNOWN_INVOKE_KEYS = {"step", "params"}
 _KNOWN_ENV_KEYS = {"key", "value", "system"}
+
+#: ``run`` 里的引用对象: ``{"data": n}`` / ``{"params": name}`` / ``{"global": name}``
+_REF_KEYS = {"data", "params", "global"}
 
 
 @dataclass(frozen=True)
@@ -362,13 +405,45 @@ class EnvEntry:
 
 
 @dataclass(frozen=True)
-class StepForward:
-    """步骤的 ``forward``：失败/成功后的去向，以及全局跳转/重定向表。"""
+class StepInvoke:
+    """步骤级调用: ``invoke: "step"`` 或 ``invoke: {"step": ..., "params": {...}}``。"""
 
-    error: str | None = None
-    success: str | None = None
+    step: str
+    params: tuple[tuple[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class StepAction:
+    """一个去向动作: ``jump`` 和 ``invoke`` 二选一。"""
+
+    jump: str | None = None
+    invoke: StepInvoke | None = None
+
+
+@dataclass(frozen=True)
+class StepTrigger:
+    """步骤的 ``trigger``: 成功/失败后的动作。"""
+
+    success: StepAction | None = None
+    error: StepAction | None = None
+
+
+@dataclass(frozen=True)
+class StepSwitch:
+    """步骤的 ``switch``: 成功后按 selector 的值选择 case 动作。"""
+
+    selector: Any = None
+    cases: tuple[tuple[str, StepAction], ...] = ()
+
+
+@dataclass(frozen=True)
+class StepForward:
+    """步骤的 ``forward``: 纯转发规则表。"""
+
     jump: tuple[tuple[str, str], ...] = ()
     redirect: tuple[tuple[str, str], ...] = ()
+    back: tuple[str, ...] = ()
+    reback: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -376,9 +451,9 @@ class Step:
     """一个步骤: 依次执行 run 中的指令，然后调用 call 中的配方，最后执行 exec/eval。
 
     ``run`` 永远是双层列表：第一层是要执行的命令列表（按位置决定顺序），第二层是
-    一条命令，只能由字符串/数字组成（数字是 data 下标）。运行时若第一个片段是
-    绝对路径或工作区里的已有文件，就"可执行文件 + 参数"直接启动，否则各片段按
-    空格拼成一条 shell 命令行。
+    一条命令，只能由字符串/数字/引用对象组成（数字是 data 下标）。运行时若第一个
+    片段是绝对路径或工作区里的已有文件，就"可执行文件 + 参数"直接启动，否则各片段
+    按空格拼成一条 shell 命令行。
 
     ``exec`` 是 Python 脚本列表（脚本 -> 行 -> 源码字符串），``eval`` 是 Python 表达式列表；
     两者在 ``run``/``call`` 之后执行。每个脚本/表达式都是独立的调用，命名空间互不共享，
@@ -387,7 +462,7 @@ class Step:
 
     name: str
     run: tuple[tuple[Any, ...], ...] = ()
-    call: tuple[tuple[str, tuple[Any, ...]], ...] = ()
+    call: tuple[tuple[str, tuple[tuple[str, Any], ...]], ...] = ()
     execs: tuple[tuple[str, ...], ...] = ()
     evals: tuple[str, ...] = ()
     env: tuple[EnvEntry, ...] = ()
@@ -398,6 +473,9 @@ class Step:
     jump: str | None = None
     next: str | None = None
     forward: StepForward = StepForward()
+    switch: StepSwitch | None = None
+    trigger: StepTrigger = StepTrigger()
+    invoke: StepInvoke | None = None
     system: str | None = None
     expression: bool | tuple[str, ...] | None = None
 
@@ -691,6 +769,22 @@ def _run_scalar(value: Any) -> bool:
     return isinstance(value, (str, int, float))
 
 
+def is_value_ref(value: Any) -> bool:
+    """是不是一个 ``{"data"/"params"/"global": ...}`` 引用对象。"""
+    return isinstance(value, dict) and len(value) == 1 and next(iter(value)) in _REF_KEYS
+
+
+def _parse_ref(raw: dict, where: str) -> dict[str, Any]:
+    """校验一个引用对象，返回原样（单键字典）。"""
+    key, value = next(iter(raw.items()))
+    if key == "data":
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise RecipeError(f"{where}: data 引用必须是非负整数下标")
+    elif not isinstance(value, str) or not value:
+        raise RecipeError(f"{where}: {key} 引用必须是非空参数名")
+    return raw
+
+
 def _parse_run(raw: Any, where: str) -> tuple[tuple[Any, ...], ...]:
     if raw is None:
         return ()
@@ -703,11 +797,17 @@ def _parse_run(raw: Any, where: str) -> tuple[tuple[Any, ...], ...]:
             raise RecipeError(f"{item_where} 必须是一个命令列表（run 永远是双层列表）")
         if not item:
             raise RecipeError(f"{item_where} 指令不能为空")
-        for part in item:
+        for part_index, part in enumerate(item):
+            part_where = f"{item_where}[{part_index}]"
+            if is_value_ref(part):
+                _parse_ref(part, part_where)
+                continue
             if not _run_scalar(part):
-                raise RecipeError(f"{item_where} 的元素必须是字符串或数字")
+                raise RecipeError(
+                    f"{part_where} 的元素必须是字符串、数字或 data/params/global 引用对象"
+                )
             if isinstance(part, str) and not part:
-                raise RecipeError(f"{item_where} 指令片段不能为空")
+                raise RecipeError(f"{part_where} 指令片段不能为空")
         commands.append(tuple(item))
     return tuple(commands)
 
@@ -748,21 +848,28 @@ def _parse_eval(raw: Any, where: str) -> tuple[str, ...]:
     return tuple(expressions)
 
 
-def _parse_call(raw: Any, where: str) -> tuple[tuple[str, tuple[Any, ...]], ...]:
+def _parse_call(raw: Any, where: str) -> tuple[tuple[str, tuple[tuple[str, Any], ...]], ...]:
+    """call 是 ``{相对路径: {参数名: 值}}``；参数用 ``{"global": 参数名}`` 引用。"""
     if raw is None:
         return ()
     if not isinstance(raw, dict):
-        raise RecipeError(f"{where} 必须是对象")
-    calls: list[tuple[str, tuple[Any, ...]]] = []
-    for rel, args in raw.items():
+        raise RecipeError(f"{where} 必须是 {{相对路径: {{参数名: 值}}}} 对象")
+    calls: list[tuple[str, tuple[tuple[str, Any], ...]]] = []
+    for rel, params in raw.items():
         if not isinstance(rel, str) or not rel:
             raise RecipeError(f"{where} 的键必须是配方相对路径")
-        if args is None:
+        if params is None:
             calls.append((rel, ()))
-        elif isinstance(args, list):
-            calls.append((rel, tuple(args)))
+        elif isinstance(params, dict):
+            for key in params:
+                if not isinstance(key, str) or not key:
+                    raise RecipeError(f"{where}.{rel} 的参数名必须是非空字符串")
+            calls.append((rel, tuple(params.items())))
         else:
-            calls.append((rel, (args,)))
+            raise RecipeError(
+                f"{where}.{rel} 必须是从参数名到值的对象，例如 {{\"var\": \"hello\"}}"
+                "（旧的下标列表写法已不再支持）"
+            )
     return tuple(calls)
 
 
@@ -839,17 +946,107 @@ def _parse_forward(raw: Any, where: str) -> StepForward:
     _warn_unknown(raw, _KNOWN_FORWARD_KEYS, where)
     jumps = _parse_name_map(raw.get("jump"), f"{where}.jump")
     redirects = _parse_name_map(raw.get("redirect"), f"{where}.redirect")
+    backs = _parse_step_names(raw.get("back"), f"{where}.back")
+    rebacks = _parse_step_names(raw.get("reback"), f"{where}.reback")
+    for field, names in (("back", backs), ("reback", rebacks)):
+        if len(set(names)) != len(names):
+            raise RecipeError(f"{where}.{field} 里有重复的步骤")
     clash = {src for src, _ in jumps} & {src for src, _ in redirects}
     if clash:
         raise RecipeError(
             f"{where}: {', '.join(sorted(clash))} 同时出现在 jump 和 redirect 里，跳转冲突"
         )
-    return StepForward(
-        error=_parse_step_name(raw.get("error"), f"{where}.error"),
-        success=_parse_step_name(raw.get("success"), f"{where}.success"),
-        jump=jumps,
-        redirect=redirects,
+    return StepForward(jump=jumps, redirect=redirects, back=backs, reback=rebacks)
+
+
+def _parse_params(raw: Any, where: str) -> tuple[tuple[str, Any], ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise RecipeError(f"{where} 必须是 {{参数名: 值}} 对象")
+    for key in raw:
+        if not isinstance(key, str) or not key:
+            raise RecipeError(f"{where} 的参数名必须是非空字符串")
+    return tuple(raw.items())
+
+
+def _parse_invoke(raw: Any, where: str) -> StepInvoke | None:
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        if not raw:
+            raise RecipeError(f"{where} 必须是非空步骤名")
+        return StepInvoke(raw)
+    if not isinstance(raw, dict):
+        raise RecipeError(f"{where} 必须是步骤名或 {{step: ..., params: ...}} 对象")
+    _warn_unknown(raw, _KNOWN_INVOKE_KEYS, where)
+    step = raw.get("step")
+    if not isinstance(step, str) or not step:
+        raise RecipeError(f"{where}.step 必须是非空步骤名")
+    return StepInvoke(step, _parse_params(raw.get("params"), f"{where}.params"))
+
+
+def _parse_action(raw: Any, where: str) -> StepAction | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RecipeError(f"{where} 必须是 {{jump: ...}} 或 {{invoke: ...}} 对象")
+    _warn_unknown(raw, _KNOWN_ACTION_KEYS, where)
+    jump = raw.get("jump")
+    invoke = raw.get("invoke")
+    if (jump is None) == (invoke is None):
+        raise RecipeError(f"{where} 必须且只能有 jump 或 invoke 之一")
+    if jump is not None:
+        name = _parse_step_name(jump, f"{where}.jump")
+        assert name is not None
+        return StepAction(jump=name)
+    return StepAction(invoke=_parse_invoke(invoke, f"{where}.invoke"))
+
+
+def _parse_trigger(raw: Any, where: str) -> StepTrigger:
+    if raw is None:
+        return StepTrigger()
+    if not isinstance(raw, dict):
+        raise RecipeError(f"{where} 必须是对象")
+    _warn_unknown(raw, _KNOWN_TRIGGER_KEYS, where)
+    return StepTrigger(
+        success=_parse_action(raw.get("success"), f"{where}.success"),
+        error=_parse_action(raw.get("error"), f"{where}.error"),
     )
+
+
+def _parse_switch(raw: Any, where: str) -> StepSwitch | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RecipeError(f"{where} 必须是对象")
+    _warn_unknown(raw, _KNOWN_SWITCH_KEYS, where)
+    if "selector" not in raw:
+        raise RecipeError(f"{where}.selector 必填")
+    selector = raw["selector"]
+    if isinstance(selector, dict):
+        if not is_value_ref(selector):
+            raise RecipeError(
+                f"{where}.selector 的对象形式必须是 data/params/global 引用"
+            )
+        selector = _parse_ref(selector, f"{where}.selector")
+    elif not _run_scalar(selector):
+        raise RecipeError(
+            f"{where}.selector 必须是字符串、数字或 data/params/global 引用"
+        )
+    cases_raw = raw.get("case")
+    if cases_raw is None:
+        cases_raw = {}
+    if not isinstance(cases_raw, dict):
+        raise RecipeError(f"{where}.case 必须是 {{值: 动作}} 对象")
+    cases: list[tuple[str, StepAction]] = []
+    for key, action_raw in cases_raw.items():
+        if not isinstance(key, str) or not key:
+            raise RecipeError(f"{where}.case 的键必须是非空字符串")
+        action = _parse_action(action_raw, f"{where}.case[{key!r}]")
+        assert action is not None
+        cases.append((key, action))
+    return StepSwitch(selector=selector, cases=tuple(cases))
 
 
 def _parse_steps(raw: Any, where: str) -> tuple[Step, ...]:
@@ -891,6 +1088,9 @@ def _parse_steps(raw: Any, where: str) -> tuple[Step, ...]:
                 forward=_parse_forward(
                     body.get("forward"), f"{step_where}.forward"
                 ),
+                switch=_parse_switch(body.get("switch"), f"{step_where}.switch"),
+                trigger=_parse_trigger(body.get("trigger"), f"{step_where}.trigger"),
+                invoke=_parse_invoke(body.get("invoke"), f"{step_where}.invoke"),
                 system=system,
                 expression=_parse_expression(body.get("expression"), f"{step_where}.expression"),
             )
@@ -1011,25 +1211,3 @@ def resolve_step_env(
     result = _apply_env_level(result, job.env, job.area, system)
     result = _apply_env_level(result, step.env, step.area, system)
     return result
-
-
-def bind_call_args(recipe: Recipe, args: list[Any] | tuple[Any, ...] | None) -> list[Any]:
-    """把 call 传入的参数绑定到配方的 data 上。
-
-    data 中的整数是入参占位符，表示"取 args 中第 N 个"。``args`` 为 None 表示
-    配方是顶层执行的，data 原样返回。
-    """
-    if args is None:
-        return list(recipe.data)
-    bound: list[Any] = []
-    for index, item in enumerate(recipe.data):
-        if isinstance(item, int) and not isinstance(item, bool):
-            if not 0 <= item < len(args):
-                raise RecipeError(
-                    f"{recipe.path.name} data[{index}] 的占位符 {item} 超出 call 传入参数范围"
-                    f" (共 {len(args)} 个)"
-                )
-            bound.append(args[item])
-        else:
-            bound.append(item)
-    return bound

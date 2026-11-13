@@ -803,15 +803,16 @@ class TestCloneDownloadUnzipUnpack(ExpressionRunnerTestCase):
 
 
 class TestCallExpression(ExpressionRunnerTestCase):
-    def test_call_path_and_args_expressions(self):
+    def test_call_path_and_params_expressions(self):
         sub_dir = self.tmp / "sub"
         sub_dir.mkdir()
         write_recipe(
             sub_dir,
             {
                 "expression": True,
-                "data": ["placeholder", 0],
-                "jobs": {"main": {"steps": {"s": {"run": [["echo", 1, ">", "out.txt"]]}}}},
+                "data": ["placeholder"],
+                "jobs": {"main": {"steps": {"s": {
+                    "run": [["echo", {"global": "var"}, ">", "out.txt"]]}}}},
             },
         )
         self.run_raw(
@@ -822,7 +823,9 @@ class TestCallExpression(ExpressionRunnerTestCase):
                         "steps": {
                             "s": {
                                 "call": {
-                                    "?!{{'sub/' + 'recipe.json'}}": ["?!{{'hello'}}"]
+                                    "?!{{'sub/' + 'recipe.json'}}": {
+                                        "var": "?!{{'hello'}}"
+                                    }
                                 }
                             }
                         }
@@ -845,7 +848,7 @@ class TestCallExpression(ExpressionRunnerTestCase):
         )
         self.run_raw(
             {
-                "jobs": {"main": {"steps": {"s": {"call": {"sub/recipe.json": []}}}}},
+                "jobs": {"main": {"steps": {"s": {"call": {"sub/recipe.json": {}}}}}},
             }
         )
         self.assertEqual(self.read("sub.txt"), str(sub_path.parent.resolve()))
@@ -873,7 +876,7 @@ class TestSubrecipeEnvAndConcurrency(ExpressionRunnerTestCase):
                                 "env": [
                                     {"key": "P", "value": "?!{{'parent:' + get_recipe_path()}}"}
                                 ],
-                                "call": {"sub/recipe.json": []},
+                                "call": {"sub/recipe.json": {}},
                             }
                         }
                     }
@@ -902,7 +905,7 @@ class TestSubrecipeEnvAndConcurrency(ExpressionRunnerTestCase):
                         "steps": {
                             "s": {
                                 "env": [{"key": "P", "value": "?!{{'parent'}}"}],
-                                "call": {"sub/recipe.json": []},
+                                "call": {"sub/recipe.json": {}},
                             }
                         }
                     }
@@ -937,9 +940,9 @@ class TestSubrecipeEnvAndConcurrency(ExpressionRunnerTestCase):
                 "jobs": {
                     "a": {
                         "linkup": "b",
-                        "steps": {"s": {"call": {"suba/recipe.json": []}}},
+                        "steps": {"s": {"call": {"suba/recipe.json": {}}}},
                     },
-                    "b": {"steps": {"s": {"call": {"subb/recipe.json": []}}}},
+                    "b": {"steps": {"s": {"call": {"subb/recipe.json": {}}}}},
                 }
             },
         )
@@ -1125,7 +1128,7 @@ class TestExpressionFailuresAreFatal(ExpressionRunnerTestCase):
                     "main": {
                         "errskip": "skip",
                         "steps": {
-                            "call": {"call": {"sub/recipe.json": []}},
+                            "call": {"call": {"sub/recipe.json": {}}},
                             "after": {"run": [["echo", "x", ">", "after.txt"]]},
                         },
                     }

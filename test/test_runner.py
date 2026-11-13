@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from devkit.errors import InteractiveInputError, RecipeError, StepError
+from devkit.errors import ExpressionError, InteractiveInputError, RecipeError, StepError
 from devkit.recipe import Recipe, Step
 from devkit.runner import RecipeRunner
 from _common import (
@@ -261,9 +261,10 @@ class TestStepControl(RunnerTestCase):
         self.assertFalse((self.workdir / "s2.txt").exists())
         self.assertTrue((self.workdir / "s3.txt").exists())
 
-    def test_if_success_jump(self):
+    def test_trigger_success_jump(self):
         path = simple_recipe(self.tmp, steps={
-            "s1": {"forward": {"success": "s3"}, "run": [echo_write("s1.txt")]},
+            "s1": {"trigger": {"success": {"jump": "s3"}},
+                   "run": [echo_write("s1.txt")]},
             "s2": {"run": [echo_write("s2.txt")]},
             "s3": {"run": [echo_write("s3.txt")]},
         })
@@ -272,9 +273,10 @@ class TestStepControl(RunnerTestCase):
         self.assertFalse((self.workdir / "s2.txt").exists())
         self.assertTrue((self.workdir / "s3.txt").exists())
 
-    def test_if_error_jump_with_proceed(self):
+    def test_trigger_error_jump_with_proceed(self):
         path = simple_recipe(self.tmp, steps={
-            "s1": {"errskip": "proceed", "forward": {"error": "s3"}, "run": [FAIL_CMD]},
+            "s1": {"errskip": "proceed", "trigger": {"error": {"jump": "s3"}},
+                   "run": [FAIL_CMD]},
             "s2": {"run": [echo_write("s2.txt")]},
             "s3": {"run": [echo_write("s3.txt")]},
         })
@@ -282,6 +284,16 @@ class TestStepControl(RunnerTestCase):
         self.assertTrue(runner.failed)  # 被 errskip 处理的失败要体现在最终结果里
         self.assertFalse((self.workdir / "s2.txt").exists())
         self.assertTrue((self.workdir / "s3.txt").exists())
+
+    def test_trigger_error_ignored_by_crash(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"errskip": "crash", "trigger": {"error": {"jump": "s3"}},
+                   "run": [FAIL_CMD]},
+            "s3": {"run": [echo_write("s3.txt")]},
+        })
+        with self.assertRaises(StepError):
+            run_recipe(path, self.workdir)
+        self.assertFalse((self.workdir / "s3.txt").exists())
 
     def test_errskip_proceed_continues_next_step(self):
         path = simple_recipe(self.tmp, steps={
@@ -345,9 +357,9 @@ class TestStepControl(RunnerTestCase):
         with self.assertRaisesRegex(RecipeError, "不存在"):
             runner.run(path)
 
-    def test_missing_if_target_raises(self):
+    def test_missing_trigger_target_raises(self):
         path = simple_recipe(self.tmp, steps={
-            "s": {"errskip": "proceed", "forward": {"error": "ghost"},
+            "s": {"errskip": "proceed", "trigger": {"error": {"jump": "ghost"}},
                   "run": [FAIL_CMD]},
         })
         runner = make_runner(self.workdir)
@@ -355,20 +367,226 @@ class TestStepControl(RunnerTestCase):
             runner.run(path)
 
 
+class TestSwitchTriggerInvoke(RunnerTestCase):
+    def test_switch_data_ref_jump(self):
+        path = simple_recipe(self.tmp, data=["two"], steps={
+            "s1": {"switch": {"selector": {"data": 0},
+                              "case": {"one": {"jump": "s3"},
+                                       "two": {"jump": "s3"}}},
+                   "run": [echo_write("s1.txt")]},
+            "s2": {"run": [echo_write("s2.txt")]},
+            "s3": {"run": [echo_write("s3.txt")]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertTrue((self.workdir / "s1.txt").exists())
+        self.assertFalse((self.workdir / "s2.txt").exists())
+        self.assertTrue((self.workdir / "s3.txt").exists())
+
+    def test_switch_expression_selector(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"switch": {"selector": "1 + 1", "case": {"2": {"jump": "s3"}}},
+                   "run": [echo_write("s1.txt")]},
+            "s2": {"run": [echo_write("s2.txt")]},
+            "s3": {"run": [echo_write("s3.txt")]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertFalse((self.workdir / "s2.txt").exists())
+        self.assertTrue((self.workdir / "s3.txt").exists())
+
+    def test_switch_literal_selector(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"switch": {"selector": "hello", "case": {"hello": {"jump": "s3"}}},
+                   "run": [echo_write("s1.txt")]},
+            "s2": {"run": [echo_write("s2.txt")]},
+            "s3": {"run": [echo_write("s3.txt")]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertFalse((self.workdir / "s2.txt").exists())
+        self.assertTrue((self.workdir / "s3.txt").exists())
+
+    def test_switch_no_match_falls_through(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"switch": {"selector": "nope", "case": {"hello": {"jump": "s3"}}},
+                   "run": [echo_write("s1.txt")]},
+            "s2": {"next": None, "run": [echo_write("s2.txt")]},
+            "s3": {"run": [echo_write("s3.txt")]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertTrue((self.workdir / "s2.txt").exists())
+        self.assertFalse((self.workdir / "s3.txt").exists())
+
+    def test_switch_selector_error_aborts(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"errskip": "proceed",
+                   "switch": {"selector": "1 / 0", "case": {}},
+                   "run": [echo_write("s1.txt")]},
+            "s2": {"run": [echo_write("s2.txt")]},
+        })
+        with self.assertRaises(ExpressionError):
+            run_recipe(path, self.workdir)
+        self.assertFalse((self.workdir / "s2.txt").exists())
+
+    def test_switch_params_selector(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"invoke": {"step": "s2", "params": {"mode": "debug"}}},
+            "s2": {"skip": True,
+                   "switch": {"selector": {"params": "mode"},
+                              "case": {"debug": {"jump": "s4"}}}},
+            "s3": {"next": None},
+            "s4": {"run": [echo_write("s4.txt")]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertTrue((self.workdir / "s4.txt").exists())
+
+    def test_switch_case_invoke(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"switch": {"selector": "hello",
+                              "case": {"hello": {"invoke": "s3"}}},
+                   "run": [echo_write("s1.txt")]},
+            "s2": {"run": [echo_write("s2.txt")]},
+            "s3": {"run": [echo_write("s3.txt")]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertTrue((self.workdir / "s1.txt").exists())
+        self.assertTrue((self.workdir / "s2.txt").exists())
+        self.assertTrue((self.workdir / "s3.txt").exists())
+
+    def test_invoke_returns_to_next_step(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"invoke": "s3", "run": [echo_write("s1.txt")]},
+            "s2": {"run": [echo_write("s2.txt")]},
+            "s3": {"run": [echo_write("s3.txt")]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertTrue((self.workdir / "s1.txt").exists())
+        self.assertTrue((self.workdir / "s2.txt").exists())
+        self.assertTrue((self.workdir / "s3.txt").exists())
+
+    def test_invoke_passes_params_only_to_target(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"invoke": {"step": "s2", "params": {"var": "hello"}},
+                   "run": [echo_write("s1.txt")]},
+            "s2": {"skip": True,
+                   "run": [["echo", {"params": "var"}, ">", "param.txt"]]},
+            "s3": {"run": [echo_write("s3.txt")]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertEqual(_common.read(self.workdir / "param.txt"), "hello")
+        self.assertTrue((self.workdir / "s3.txt").exists())
+
+    def test_invoke_missing_param_raises(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"invoke": "s2"},
+            "s2": {"run": [["echo", {"params": "var"}, ">", "param.txt"]]},
+        })
+        with self.assertRaisesRegex(RecipeError, "不存在参数"):
+            run_recipe(path, self.workdir)
+
+    def test_trigger_success_invoke(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"trigger": {"success": {"invoke": "s3"}},
+                   "run": [echo_write("s1.txt")]},
+            "s2": {"run": [echo_write("s2.txt")]},
+            "s3": {"run": [echo_write("s3.txt")]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertTrue((self.workdir / "s2.txt").exists())
+        self.assertTrue((self.workdir / "s3.txt").exists())
+
+    def test_trigger_error_invoke_with_proceed(self):
+        path = simple_recipe(self.tmp, steps={
+            "s1": {"errskip": "proceed", "trigger": {"error": {"invoke": "s3"}},
+                   "run": [FAIL_CMD]},
+            "s2": {"run": [echo_write("s2.txt")]},
+            "s3": {"run": [echo_write("s3.txt")]},
+        })
+        runner = run_recipe(path, self.workdir)
+        self.assertTrue(runner.failed)
+        self.assertTrue((self.workdir / "s2.txt").exists())
+        self.assertTrue((self.workdir / "s3.txt").exists())
+
+    def test_data_ref_object_in_run(self):
+        path = simple_recipe(self.tmp, data=["hello"], steps={
+            "s": {"run": [["echo", {"data": 0}, ">", "data.txt"]]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertEqual(_common.read(self.workdir / "data.txt"), "hello")
+
+    def test_forward_back_returns_after_execution(self):
+        path = simple_recipe(self.tmp, steps={
+            "b": {
+                "switch": {
+                    "selector": "__import__('os').path.exists('go.txt')",
+                    "case": {"True": {"jump": "done"}},
+                },
+                "forward": {"back": ["d"]},
+            },
+            "c": {"run": [echo_write("c.txt")]},
+            "d": {"run": [echo_write("go.txt")]},
+            "done": {"run": [echo_write("done.txt")]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertTrue((self.workdir / "c.txt").exists())
+        self.assertTrue((self.workdir / "go.txt").exists())
+        self.assertTrue((self.workdir / "done.txt").exists())
+
+    def test_forward_reback_skips_source_step(self):
+        path = simple_recipe(self.tmp, steps={
+            "b": {
+                "switch": {
+                    "selector": "__import__('os').path.exists('go.txt')",
+                    "case": {"True": {"jump": "done"}},
+                },
+                "forward": {"reback": ["d"]},
+            },
+            "c": {"run": [echo_write("go.txt")]},
+            "d": {"run": [echo_write("d.txt")]},
+            "done": {"run": [echo_write("done.txt")]},
+        })
+        run_recipe(path, self.workdir)
+        self.assertTrue((self.workdir / "go.txt").exists())
+        self.assertFalse((self.workdir / "d.txt").exists())
+        self.assertTrue((self.workdir / "done.txt").exists())
+
+
 class TestCall(RunnerTestCase):
-    def test_call_binds_args_into_child_data(self):
+    def test_call_passes_globals_to_child(self):
         write_recipe(self.tmp, {
-            "data": ["hi", 0],
+            "data": ["fallback"],
             "jobs": {"print": {"steps": {"s": {
-                "run": [["echo", 1, ">", "child.txt"]]}}}},
+                "run": [["echo", {"global": "var"}, ">", "child.txt"]]}}}},
         }, "child.json")
         path = simple_recipe(self.tmp, steps={
-            "s": {"call": {"child.json": ["hello-arg"]}},
+            "s": {"call": {"child.json": {"var": "hello-arg"}}},
         })
         runner = run_recipe(path, self.workdir)
         self.assertFalse(runner.failed)
         # 无 clone 的被调用配方与父配方共用工作区
         self.assertEqual(_common.read(self.workdir / "child.txt"), "hello-arg")
+
+    def test_call_params_inherited_by_deeper_call(self):
+        write_recipe(self.tmp, {
+            "jobs": {"print": {"steps": {"s": {
+                "run": [["echo", {"global": "var"}, ">", "deep.txt"]]}}}},
+        }, "deep.json")
+        write_recipe(self.tmp, {
+            "jobs": {"print": {"steps": {"s": {
+                "call": {"deep.json": {}}}}}},
+        }, "mid.json")
+        path = simple_recipe(self.tmp, steps={
+            "s": {"call": {"mid.json": {"var": "through"}}},
+        })
+        run_recipe(path, self.workdir)
+        self.assertEqual(_common.read(self.workdir / "deep.txt"), "through")
+
+    def test_call_missing_global_raises(self):
+        write_recipe(self.tmp, {
+            "jobs": {"print": {"steps": {"s": {
+                "run": [["echo", {"global": "ghost"}, ">", "child.txt"]]}}}},
+        }, "child.json")
+        path = simple_recipe(self.tmp, steps={"s": {"call": {"child.json": {}}}})
+        with self.assertRaisesRegex(RecipeError, "不存在参数"):
+            run_recipe(path, self.workdir)
 
     def test_call_directory_finds_recipe_json(self):
         sub = self.tmp / "sub"
@@ -376,13 +594,13 @@ class TestCall(RunnerTestCase):
             "jobs": {"print": {"steps": {"s": {
                 "run": [["echo", "from-dir", ">", "dirchild.txt"]]}}}},
         }, "recipe.json")
-        path = simple_recipe(self.tmp, steps={"s": {"call": {"sub": []}}})
+        path = simple_recipe(self.tmp, steps={"s": {"call": {"sub": {}}}})
         run_recipe(path, self.workdir)
         self.assertEqual(_common.read(self.workdir / "dirchild.txt"), "from-dir")
 
     def test_call_cycle_detected(self):
         path = write_recipe(self.tmp, {
-            "jobs": {"main": {"steps": {"s": {"call": {"recipe.json": []}}}}},
+            "jobs": {"main": {"steps": {"s": {"call": {"recipe.json": {}}}}}},
         })
         runner = make_runner(self.workdir)
         with self.assertRaisesRegex(RecipeError, "循环"):
@@ -395,7 +613,7 @@ class TestCall(RunnerTestCase):
                 "run": [["echo", "kid", ">", "kid.txt"]]}}}},
         }, "kid.json")
         path = simple_recipe(self.tmp, steps={
-            "s": {"call": {"kid.json": []}},
+            "s": {"call": {"kid.json": {}}},
         })
         runner = run_recipe(path, self.workdir, dry_run=True)
         self.assertFalse(runner.failed)
@@ -841,7 +1059,7 @@ class TestEnvExecution(RunnerTestCase):
         raw = {
             "env": [{"key": "DK_FROM_PARENT", "value": "inherited"}],
             "jobs": {"main": {"steps": {"parent": {
-                "call": {"child.json": []}}}}},
+                "call": {"child.json": {}}}}}},
         }
         run_recipe(write_recipe(self.tmp, raw), self.workdir)
         self.assertEqual(_common.read(self.workdir / "child.txt"), "inherited")
@@ -859,7 +1077,7 @@ class TestEnvExecution(RunnerTestCase):
         raw = {
             "env": [{"key": "DK_FROM_PARENT", "value": "inherited"}],
             "jobs": {"main": {"steps": {"parent": {
-                "call": {"child.json": []}}}}},
+                "call": {"child.json": {}}}}}},
         }
         run_recipe(write_recipe(self.tmp, raw), self.workdir)
         self.assertEqual(_common.read(self.workdir / "inherited.txt"), "")
@@ -1053,7 +1271,7 @@ class TestEnvUnderLinkup(RunnerTestCase):
                     "linkup": ["other"],
                     "env": [{"key": "DK_PARENT", "value": "from-initiator"}],
                     "run": [echo_write("i.txt")],
-                    "call": {"child.json": []},
+                    "call": {"child.json": {}},
                 },
                 "other": {
                     "skip": True,

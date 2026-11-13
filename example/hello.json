@@ -1,10 +1,10 @@
 {
-  "data": ["hi", 0],
+  "data": ["hi"],
   "jobs": {
     "print": {
       "steps": {
         "greet": {
-          "run": [["echo", 0], ["echo", 1]]
+          "run": [["echo", 0], ["echo", {"global": "var"}]]
         }
       }
     }

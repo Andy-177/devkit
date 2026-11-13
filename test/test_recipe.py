@@ -21,7 +21,6 @@ from devkit.recipe import (
     Step,
     UnpackSpec,
     UnzipSpec,
-    bind_call_args,
     load_recipe,
     resolve_recipe_path,
     resolve_step_env,
@@ -336,7 +335,7 @@ class TestRunParsing(unittest.TestCase):
             self._steps({"s": {"run": [["echo", ""]]}})
 
     def test_bad_fragment_type(self):
-        with self.assertRaisesRegex(RecipeError, "字符串或数字"):
+        with self.assertRaisesRegex(RecipeError, "字符串、数字或"):
             self._steps({"s": {"run": [["echo", ["x"]]]}})
 
     def test_run_null_is_empty(self):
@@ -420,31 +419,45 @@ class TestStepControlFields(unittest.TestCase):
         self.assertEqual(s.linkup, ())
         self.assertIsNone(s.jump)
         self.assertIsNone(s.next)
-        self.assertIsNone(s.forward.error)
-        self.assertIsNone(s.forward.success)
         self.assertEqual(s.forward.jump, ())
         self.assertEqual(s.forward.redirect, ())
+        self.assertEqual(s.forward.back, ())
+        self.assertEqual(s.forward.reback, ())
+        self.assertIsNone(s.trigger.success)
+        self.assertIsNone(s.trigger.error)
+        self.assertIsNone(s.switch)
+        self.assertIsNone(s.invoke)
 
     def test_all_fields(self):
         s = self._step({
             "run": [["x"]], "skip": True, "errskip": "proceed",
             "linkup": ["t"], "jump": "u", "next": "job-b",
-            "forward": {"error": "e", "success": "ok",
-                        "jump": {"a": "b"}, "redirect": {"c": "d"}},
+            "forward": {"jump": {"a": "b"}, "redirect": {"c": "d"},
+                        "back": ["e"], "reback": ["f"]},
+            "trigger": {"success": {"jump": "ok"}, "error": {"invoke": "recover"}},
+            "switch": {"selector": "1 + 1", "case": {"2": {"jump": "two"}}},
+            "invoke": {"step": "callme", "params": {"var": "hello"}},
         }, extra={"t": {"run": [["y"]]}})
         self.assertTrue(s.skip)
         self.assertEqual(s.errskip, "proceed")
         self.assertEqual(s.linkup, ("t",))
         self.assertEqual(s.jump, "u")
         self.assertEqual(s.next, "job-b")
-        self.assertEqual(s.forward.error, "e")
-        self.assertEqual(s.forward.success, "ok")
         self.assertEqual(s.forward.jump, (("a", "b"),))
         self.assertEqual(s.forward.redirect, (("c", "d"),))
+        self.assertEqual(s.forward.back, ("e",))
+        self.assertEqual(s.forward.reback, ("f",))
+        self.assertEqual(s.trigger.success.jump, "ok")
+        self.assertEqual(s.trigger.error.invoke.step, "recover")
+        self.assertEqual(s.switch.selector, "1 + 1")
+        self.assertEqual(s.switch.cases[0][0], "2")
+        self.assertEqual(s.switch.cases[0][1].jump, "two")
+        self.assertEqual(s.invoke.step, "callme")
+        self.assertEqual(s.invoke.params, (("var", "hello"),))
 
     def test_old_if_key_ignored(self):
         s = self._step({"if": {"success": "t"}, "run": [["x"]]}, extra={"t": {}})
-        self.assertIsNone(s.forward.success)
+        self.assertIsNone(s.trigger.success)
 
     def test_next_null_means_next_job(self):
         s = self._step({"run": [["x"]], "next": None})
@@ -478,9 +491,70 @@ class TestStepControlFields(unittest.TestCase):
         with self.assertRaises(RecipeError):
             self._step({"forward": {"jump": {"a": 1}}})
 
+    def test_back_and_reback_must_be_names(self):
+        with self.assertRaises(RecipeError):
+            self._step({"forward": {"back": "a"}})
+        with self.assertRaises(RecipeError):
+            self._step({"forward": {"reback": [1]}})
+
+    def test_back_duplicate_rejected(self):
+        with self.assertRaisesRegex(RecipeError, "重复"):
+            self._step({"forward": {"back": ["a", "a"]}})
+
     def test_bad_next(self):
         with self.assertRaises(RecipeError):
             self._step({"next": 5})
+
+    def test_trigger_action_needs_exactly_one(self):
+        for action in ({}, {"jump": "a", "invoke": "b"}, {"jump": 1}):
+            with self.subTest(action=action), self.assertRaises(RecipeError):
+                self._step({"trigger": {"success": action}})
+
+    def test_trigger_unknown_key_ignored(self):
+        s = self._step({"trigger": {"success": {"jump": "a"}, "ghost": 1}})
+        self.assertEqual(s.trigger.success.jump, "a")
+
+    def test_switch_requires_selector(self):
+        with self.assertRaisesRegex(RecipeError, "selector"):
+            self._step({"switch": {"case": {}}})
+
+    def test_switch_selector_forms(self):
+        for selector in ("1 + 1", 1, {"data": 0}, {"params": "x"}, {"global": "g"}):
+            with self.subTest(selector=selector):
+                s = self._step({"switch": {"selector": selector}})
+                self.assertEqual(s.switch.selector, selector)
+
+    def test_switch_bad_selector(self):
+        for selector in ([], {"x": 1}, {"data": -1}, {"params": ""}):
+            with self.subTest(selector=selector), self.assertRaises(RecipeError):
+                self._step({"switch": {"selector": selector}})
+
+    def test_switch_case_needs_action(self):
+        with self.assertRaises(RecipeError):
+            self._step({"switch": {"selector": 1, "case": {"1": {}}}})
+
+    def test_invoke_forms(self):
+        self.assertEqual(self._step({"invoke": "a"}).invoke.step, "a")
+        s = self._step({"invoke": {"step": "a", "params": {"x": 1}}})
+        self.assertEqual(s.invoke.params, (("x", 1),))
+
+    def test_bad_invoke(self):
+        for raw in ("", {}, {"step": ""}, {"step": "a", "params": []}, 5):
+            with self.subTest(raw=raw), self.assertRaises(RecipeError):
+                self._step({"invoke": raw})
+
+    def test_run_ref_objects(self):
+        s = self._step({"run": [["echo", {"data": 0}, {"params": "x"},
+                                {"global": "g"}]]})
+        self.assertEqual(
+            s.run[0],
+            ("echo", {"data": 0}, {"params": "x"}, {"global": "g"}),
+        )
+
+    def test_bad_run_ref(self):
+        for ref in ({"data": -1}, {"data": "0"}, {"params": ""}, {"other": 1}):
+            with self.subTest(ref=ref), self.assertRaises(RecipeError):
+                self._step({"run": [["echo", ref]]})
 
 
 class TestCallParsing(unittest.TestCase):
@@ -494,18 +568,18 @@ class TestCallParsing(unittest.TestCase):
             self.tmp, {"jobs": {"j": {"steps": {"s": {"call": raw}}}}}))
         return recipe.jobs[0].steps[0].call
 
-    def test_args_list(self):
-        self.assertEqual(self._call({"sub.json": ["a", 1]}), (("sub.json", ("a", 1)),))
+    def test_params_object(self):
+        self.assertEqual(
+            self._call({"sub.json": {"a": "x", "b": 1}}),
+            (("sub.json", (("a", "x"), ("b", 1))),),
+        )
 
-    def test_args_null(self):
+    def test_params_null(self):
         self.assertEqual(self._call({"sub.json": None}), (("sub.json", ()),))
 
-    def test_args_scalar_wrapped(self):
-        self.assertEqual(self._call({"sub.json": "only"}), (("sub.json", ("only",)),))
-        self.assertEqual(self._call({"sub.json": 5}), (("sub.json", (5,)),))
-
     def test_bad_call(self):
-        for raw in ([], {"": []}, "sub.json", ["sub.json"]):
+        for raw in ([], {"": []}, "sub.json", ["sub.json"],
+                    {"sub.json": ["a"]}, {"sub.json": 5}):
             with self.subTest(raw=raw), self.assertRaises(RecipeError):
                 self._call(raw)
 
@@ -560,33 +634,6 @@ class TestJobsParsing(unittest.TestCase):
     def test_bad_jobs_type(self):
         with self.assertRaisesRegex(RecipeError, "必须是对象"):
             load_recipe(write_recipe(self.tmp, {"jobs": []}))
-
-
-class TestBindCallArgs(unittest.TestCase):
-    def _recipe(self, data) -> Recipe:
-        with tempfile.TemporaryDirectory() as td:
-            return load_recipe(write_recipe(Path(td), {"data": data}))
-
-    def test_top_level_returns_data(self):
-        recipe = self._recipe(["hi", 0, 5])
-        self.assertEqual(bind_call_args(recipe, None), ["hi", 0, 5])
-
-    def test_placeholders_bound(self):
-        recipe = self._recipe(["hi", 0, "x", 1])
-        self.assertEqual(bind_call_args(recipe, ["A", "B"]), ["hi", "A", "x", "B"])
-
-    def test_bool_is_not_placeholder(self):
-        recipe = self._recipe([True, False])
-        self.assertEqual(bind_call_args(recipe, ["A"]), [True, False])
-
-    def test_out_of_range(self):
-        recipe = self._recipe([0, 1])
-        with self.assertRaisesRegex(RecipeError, "超出"):
-            bind_call_args(recipe, ["only-one"])
-
-    def test_no_args_needed(self):
-        recipe = self._recipe(["plain"])
-        self.assertEqual(bind_call_args(recipe, []), ["plain"])
 
 
 class TestEnvBlock(unittest.TestCase):

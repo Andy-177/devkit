@@ -80,7 +80,10 @@ from devkit.recipe import (
     Job,
     Recipe,
     Step,
-    bind_call_args,
+    StepAction,
+    StepInvoke,
+    StepSwitch,
+    is_value_ref,
     load_recipe,
     resolve_recipe_path,
 )
@@ -101,6 +104,22 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win3
 
 #: exec/eval 需要临时切换进程 cwd；联动步骤并发时用这把锁串行化切换。
 _PYTHON_CWD_LOCK = threading.Lock()
+
+#: invoke 的最大嵌套层数（防止自调用/互相调用无限递归）
+_MAX_INVOKE_DEPTH = 64
+
+
+class _LiteralNamespace(dict):
+    """selector 表达式用的命名空间: 未知的裸名字当作字面字符串。
+
+    例如 ``"selector": "hello"`` 会得到字符串 ``"hello"``，而 ``"1 + 1"`` 仍然是
+    正常的 Python 表达式。内置名字（``len`` 等）和 dunder 名字保持正常解析。
+    """
+
+    def __missing__(self, key: str) -> Any:
+        if key.startswith("__") or hasattr(builtins, key):
+            raise KeyError(key)
+        return key
 
 
 def _quote(text: str) -> str:
@@ -134,7 +153,7 @@ class RecipeRunner:
         """执行一个配方（顶层调用）。"""
         self._run_recipe(
             resolve_recipe_path(recipe_path),
-            args=None,
+            globals_={},
             workdir=self.workdir,
             stack=(),
             top=True,
@@ -325,7 +344,7 @@ class RecipeRunner:
         self,
         path: Path,
         *,
-        args: list[Any] | None,
+        globals_: dict[str, Any] | None,
         workdir: Path,
         stack: tuple[Path, ...],
         top: bool,
@@ -340,10 +359,19 @@ class RecipeRunner:
         logger.info("== 配方: {}", recipe.path)
 
         cwd = self._prepare(recipe, workdir=workdir, top=top)
-        data = bind_call_args(recipe, args)
+        # data 只作为常量数据；call 参数通过单独的 globals_ 传递。
+        data = list(recipe.data)
         data = self._eval_value(data, recipe, feature="data")
 
-        self._run_works(recipe, data=data, cwd=cwd, stack=stack, top=top, env=env)
+        self._run_works(
+            recipe,
+            data=data,
+            globals_=globals_ or {},
+            cwd=cwd,
+            stack=stack,
+            top=top,
+            env=env,
+        )
 
     def _prepare(self, recipe: Recipe, *, workdir: Path, top: bool) -> Path:
         """计算并创建该配方的工作目录。"""
@@ -361,6 +389,7 @@ class RecipeRunner:
         recipe: Recipe,
         *,
         data: list[Any],
+        globals_: dict[str, Any],
         cwd: Path,
         stack: tuple[Path, ...],
         top: bool,
@@ -374,7 +403,9 @@ class RecipeRunner:
         self._run_unzips(recipe, cwd)
         self._run_unpacks(recipe)
         self._run_pulls(recipe)
-        self._run_jobs(recipe, data=data, cwd=cwd, stack=stack, top=top, env=env)
+        self._run_jobs(
+            recipe, data=data, globals_=globals_, cwd=cwd, stack=stack, top=top, env=env
+        )
 
     def _clone(self, recipe: Recipe, cwd: Path) -> None:
         assert recipe.clone is not None
@@ -457,7 +488,7 @@ class RecipeRunner:
         recipe: Recipe,
         cwd: Path,
     ) -> None:
-        """执行步骤里的 ``exec`` 脚本和 ``eval`` 表达式（共用同一个命名空间）。"""
+        """执行步骤里的 ``exec`` 脚本和 ``eval`` 表达式（每个调用各自独立命名空间）。"""
         if not step.execs and not step.evals:
             return
         if self.dry_run:
@@ -517,6 +548,7 @@ class RecipeRunner:
         recipe: Recipe,
         *,
         data: list[Any],
+        globals_: dict[str, Any],
         cwd: Path,
         stack: tuple[Path, ...],
         top: bool,
@@ -550,6 +582,7 @@ class RecipeRunner:
                 linked,
                 recipe=recipe,
                 data=data,
+                globals_=globals_,
                 cwd=cwd,
                 stack=stack,
                 job_names=set(index_of),
@@ -574,6 +607,7 @@ class RecipeRunner:
         *,
         recipe: Recipe,
         data: list[Any],
+        globals_: dict[str, Any],
         cwd: Path,
         stack: tuple[Path, ...],
         job_names: set[str],
@@ -592,6 +626,7 @@ class RecipeRunner:
                     job,
                     recipe=recipe,
                     data=data,
+                    globals_=globals_,
                     cwd=cwd,
                     stack=stack,
                     job_names=job_names,
@@ -614,6 +649,7 @@ class RecipeRunner:
                         member,
                         recipe=recipe,
                         data=data,
+                        globals_=globals_,
                         cwd=cwd,
                         stack=stack,
                         job_names=job_names,
@@ -672,6 +708,7 @@ class RecipeRunner:
         *,
         recipe: Recipe,
         data: list[Any],
+        globals_: dict[str, Any],
         cwd: Path,
         stack: tuple[Path, ...],
         job_names: set[str],
@@ -689,9 +726,63 @@ class RecipeRunner:
             steps, index_of, job_names, where=f"{recipe.path.name} 工作流 {job.name}"
         )
 
-        cursor = 0
-        explicit = False  # 是不是被 jump/redirect 明确指过来的（是的话 skip 不生效）
-        while cursor < len(steps):
+        result = self._run_frames(
+            steps,
+            index_of,
+            jumps,
+            redirects,
+            0,
+            single=False,
+            params={},
+            recipe=recipe,
+            job=job,
+            data=data,
+            globals_=globals_,
+            cwd=cwd,
+            stack=stack,
+            env=env,
+            depth=0,
+        )
+        if result == NEXT_JOB:
+            return None
+        if result is not None:
+            return result
+        logger.info("-- 工作流 {} 完成", job.name)
+        return None
+
+    def _run_frames(
+        self,
+        steps: list[Step],
+        index_of: dict[str, int],
+        jumps: dict[str, str],
+        redirects: dict[str, str],
+        start: int,
+        *,
+        single: bool,
+        params: dict[str, Any],
+        recipe: Recipe,
+        job: Job,
+        data: list[Any],
+        globals_: dict[str, Any],
+        cwd: Path,
+        stack: tuple[Path, ...],
+        env: dict[str, str] | None,
+        depth: int,
+    ) -> str | None:
+        """执行一段步骤流；``single`` 为真时表示这是一个 invoke 子帧。
+
+        invoke 子帧执行完目标步骤（以及它显式跳转到的后续步骤）后返回，调用方
+        继续执行自己的下一步。返回 ``None`` 表示正常结束，``NEXT_JOB`` 表示结束
+        当前作业，其他字符串表示切换到该作业。
+        """
+        if depth > _MAX_INVOKE_DEPTH:
+            raise RecipeError(
+                f"{recipe.path.name} 工作流 {job.name}: invoke 嵌套超过 {_MAX_INVOKE_DEPTH} 层"
+            )
+
+        cursor = start
+        explicit = single  # invoke 指到的步骤即使 skip:true 也要执行
+        while 0 <= cursor < len(steps):
             step = steps[cursor]
             redirect = redirects.get(step.name)
             if redirect is not None:
@@ -717,57 +808,265 @@ class RecipeRunner:
                 continue
 
             linked = [steps[index_of[name]] for name in step.linkup]
-            try:
-                self._run_step(
-                    step,
-                    linked=linked,
+            kind, value = self._execute_step(
+                step,
+                linked=linked,
+                recipe=recipe,
+                job=job,
+                data=data,
+                params=params,
+                globals_=globals_,
+                cwd=cwd,
+                stack=stack,
+                env=env,
+                jumps=jumps,
+            )
+
+            if kind == "next":
+                if value is None or value == NEXT_JOB:
+                    logger.info("  > 步骤 {} 的 next: 结束工作流 {}", step.name, job.name)
+                    return NEXT_JOB
+                logger.info("  > 步骤 {} 的 next: 切换到工作流 {}", step.name, value)
+                return value
+            if kind == "jump":
+                logger.info("  > 步骤 {} 跳转到 {}", step.name, value)
+                cursor = index_of[value]
+                single = False
+                explicit = True
+                continue
+            if kind == "invoke":
+                spec: StepInvoke = value
+                invoke_params = self._resolve_params(
+                    spec.params,
+                    data=data,
+                    params=params,
+                    globals_=globals_,
+                    recipe=recipe,
+                    step=step,
+                )
+                logger.info(
+                    "  > 步骤 {} invoke {} params={}",
+                    step.name,
+                    spec.step,
+                    json.dumps(invoke_params, ensure_ascii=False, default=str),
+                )
+                result = self._run_frames(
+                    steps,
+                    index_of,
+                    jumps,
+                    redirects,
+                    index_of[spec.step],
+                    single=True,
+                    params=invoke_params,
                     recipe=recipe,
                     job=job,
                     data=data,
+                    globals_=globals_,
                     cwd=cwd,
                     stack=stack,
                     env=env,
+                    depth=depth + 1,
                 )
-            except InteractiveInputError:
-                raise
-            except StepError as exc:
-                if step.errskip == STEP_ERR_CRASH:
-                    logger.error("步骤 {} 失败 (errskip:crash): {}", step.name, exc)
-                    raise
-                if step.errskip == STEP_ERR_STOP:
-                    logger.error("步骤 {} 失败 (errskip:stop): 终止作业 {}", step.name, job.name)
-                    raise JobStop(job.name, step.name, exc) from exc
-                self.failed = True
-                target = step.forward.error or step.jump or jumps.get(step.name)
-                if target is not None:
-                    logger.error(
-                        "步骤 {} 失败 (errskip:{}): 跳转到 {}", step.name, step.errskip, target
-                    )
-                    cursor = index_of[target]
-                    explicit = True
-                    continue
-                logger.error(
-                    "步骤 {} 失败 (errskip:{}): 继续下一个步骤", step.name, step.errskip
-                )
+                if result is not None:
+                    return result
+                if single:
+                    return None
                 cursor += 1
                 continue
-
-            if step.next is not None:
-                if step.next == NEXT_JOB:
-                    logger.info("  > 步骤 {} 的 next: 结束工作流 {}", step.name, job.name)
-                    return None
-                logger.info("  > 步骤 {} 的 next: 切换到工作流 {}", step.name, step.next)
-                return step.next
-            target = step.forward.success or step.jump or jumps.get(step.name)
-            if target is not None:
-                logger.info("  > 步骤 {} 跳转到 {}", step.name, target)
-                cursor = index_of[target]
-                explicit = True
-                continue
+            # kind == "fall"
+            if single:
+                return None
             cursor += 1
-
-        logger.info("-- 工作流 {} 完成", job.name)
         return None
+
+    def _execute_step(
+        self,
+        step: Step,
+        *,
+        linked: list[Step],
+        recipe: Recipe,
+        job: Job,
+        data: list[Any],
+        params: dict[str, Any],
+        globals_: dict[str, Any],
+        cwd: Path,
+        stack: tuple[Path, ...],
+        env: dict[str, str] | None,
+        jumps: dict[str, str],
+    ) -> tuple[str, Any]:
+        """执行步骤主体，返回去向 ``(kind, value)``，并处理 errskip。"""
+        try:
+            self._run_step(
+                step,
+                linked=linked,
+                recipe=recipe,
+                job=job,
+                data=data,
+                params=params,
+                globals_=globals_,
+                cwd=cwd,
+                stack=stack,
+                env=env,
+            )
+            return self._success_flow(
+                step,
+                recipe=recipe,
+                job=job,
+                data=data,
+                params=params,
+                globals_=globals_,
+                cwd=cwd,
+                jumps=jumps,
+            )
+        except InteractiveInputError:
+            raise
+        except StepError as exc:
+            if step.errskip == STEP_ERR_CRASH:
+                logger.error("步骤 {} 失败 (errskip:crash): {}", step.name, exc)
+                raise
+            if step.errskip == STEP_ERR_STOP:
+                logger.error("步骤 {} 失败 (errskip:stop): 终止作业 {}", step.name, job.name)
+                raise JobStop(job.name, step.name, exc) from exc
+            self.failed = True
+            if step.trigger.error is not None:
+                logger.error(
+                    "步骤 {} 失败 (errskip:{}): 按 trigger.error 处理",
+                    step.name,
+                    step.errskip,
+                )
+                return self._action_flow(step.trigger.error)
+            target = step.jump or jumps.get(step.name)
+            if target is not None:
+                logger.error(
+                    "步骤 {} 失败 (errskip:{}): 跳转到 {}", step.name, step.errskip, target
+                )
+                return ("jump", target)
+            logger.error(
+                "步骤 {} 失败 (errskip:{}): 继续下一个步骤", step.name, step.errskip
+            )
+            return ("fall", None)
+
+    def _success_flow(
+        self,
+        step: Step,
+        *,
+        recipe: Recipe,
+        job: Job,
+        data: list[Any],
+        params: dict[str, Any],
+        globals_: dict[str, Any],
+        cwd: Path,
+        jumps: dict[str, str],
+    ) -> tuple[str, Any]:
+        """步骤成功后按优先级计算去向。"""
+        if step.next is not None:
+            return ("next", step.next)
+        if step.switch is not None:
+            action = self._match_switch(
+                step.switch,
+                step=step,
+                recipe=recipe,
+                data=data,
+                params=params,
+                globals_=globals_,
+                cwd=cwd,
+            )
+            if action is not None:
+                return self._action_flow(action)
+        if step.trigger.success is not None:
+            return self._action_flow(step.trigger.success)
+        if step.invoke is not None:
+            return ("invoke", step.invoke)
+        target = step.jump or jumps.get(step.name)
+        if target is not None:
+            return ("jump", target)
+        return ("fall", None)
+
+    @staticmethod
+    def _action_flow(action: StepAction) -> tuple[str, Any]:
+        if action.invoke is not None:
+            return ("invoke", action.invoke)
+        assert action.jump is not None
+        return ("jump", action.jump)
+
+    def _match_switch(
+        self,
+        switch: StepSwitch,
+        *,
+        step: Step,
+        recipe: Recipe,
+        data: list[Any],
+        params: dict[str, Any],
+        globals_: dict[str, Any],
+        cwd: Path,
+    ) -> StepAction | None:
+        selector = switch.selector
+        if is_value_ref(selector):
+            value = self._resolve_ref(
+                selector,
+                data=data,
+                params=params,
+                globals_=globals_,
+                recipe=recipe,
+                step=step,
+            )
+        elif isinstance(selector, str):
+            value = self._eval_selector(
+                selector,
+                step=step,
+                recipe=recipe,
+                data=data,
+                params=params,
+                globals_=globals_,
+                cwd=cwd,
+            )
+        else:
+            value = selector
+        key = str(value)
+        for case_key, action in switch.cases:
+            if case_key == key:
+                logger.info("  > 步骤 {} switch 命中 {!r}", step.name, key)
+                return action
+        logger.debug("  - 步骤 {} switch 未命中 {!r}", step.name, key)
+        return None
+
+    def _eval_selector(
+        self,
+        selector: str,
+        *,
+        step: Step,
+        recipe: Recipe,
+        data: list[Any],
+        params: dict[str, Any],
+        globals_: dict[str, Any],
+        cwd: Path,
+    ) -> Any:
+        """按 Python 表达式求值 switch.selector；未知裸名字按字面字符串处理。"""
+        ns = _LiteralNamespace(self._get_expr_ns(recipe))
+        ns["data"] = list(data)
+        ns["params"] = dict(params)
+        ns["globals"] = dict(globals_)
+        # selector 里的相对路径按步骤工作区解析，和 exec/eval 保持一致。
+        with _PYTHON_CWD_LOCK:
+            previous = os.getcwd()
+            os.chdir(cwd)
+            try:
+                return builtins.eval(selector, ns, ns)
+            except SyntaxError:
+                # 不是合法 Python 表达式时按字面字符串处理（例如 "hello world"）。
+                return selector
+            except (Exception, SystemExit):
+                logger.error(
+                    "步骤 {} 的 switch.selector 求值失败:\n{}",
+                    step.name,
+                    traceback.format_exc(),
+                )
+                raise ExpressionError(
+                    f"{recipe.path.name} 步骤 {step.name} switch.selector 求值失败: "
+                    f"{selector!r}"
+                ) from None
+            finally:
+                os.chdir(previous)
 
     def _flow_tables(
         self,
@@ -783,36 +1082,70 @@ class RecipeRunner:
             if name not in index_of:
                 raise RecipeError(f"{where}: {field} 引用了不存在的步骤 {name!r}")
 
+        def check_action(action: StepAction, field: str) -> None:
+            if action.jump is not None:
+                check_step(action.jump, f"{field}.jump")
+            if action.invoke is not None:
+                check_step(action.invoke.step, f"{field}.invoke")
+
         jumps: dict[str, str] = {}
         redirects: dict[str, str] = {}
+
+        def add_jump(src: str, dst: str) -> None:
+            if src in redirects:
+                raise RecipeError(
+                    f"{where}: {src!r} 同时出现在 jump/back 和 redirect/reback 里，跳转冲突"
+                )
+            if src in jumps and jumps[src] != dst:
+                raise RecipeError(
+                    f"{where}: {src!r} 有多个跳转目标 ({jumps[src]!r} / {dst!r})"
+                )
+            jumps[src] = dst
+
+        def add_redirect(src: str, dst: str) -> None:
+            if src in jumps:
+                raise RecipeError(
+                    f"{where}: {src!r} 同时出现在 jump/back 和 redirect/reback 里，跳转冲突"
+                )
+            if src in redirects and redirects[src] != dst:
+                raise RecipeError(
+                    f"{where}: {src!r} 有多个重定向目标 ({redirects[src]!r} / {dst!r})"
+                )
+            redirects[src] = dst
+
         for step in steps:
             if step.jump is not None:
                 check_step(step.jump, f"步骤 {step.name} 的 jump")
-            if step.forward.success is not None:
-                check_step(step.forward.success, f"步骤 {step.name} 的 forward.success")
-            if step.forward.error is not None:
-                check_step(step.forward.error, f"步骤 {step.name} 的 forward.error")
             if step.next is not None and step.next != NEXT_JOB and step.next not in job_names:
                 raise RecipeError(
                     f"{where}: 步骤 {step.name} 的 next 引用了不存在的作业 {step.next!r}"
                 )
             for name in step.linkup:
                 check_step(name, f"步骤 {step.name} 的 linkup")
+            for action_name in ("success", "error"):
+                action = getattr(step.trigger, action_name)
+                if action is not None:
+                    check_action(action, f"步骤 {step.name} 的 trigger.{action_name}")
+            if step.switch is not None:
+                for key, action in step.switch.cases:
+                    check_action(action, f"步骤 {step.name} 的 switch.case[{key!r}]")
+            if step.invoke is not None:
+                check_step(step.invoke.step, f"步骤 {step.name} 的 invoke")
             for src, dst in step.forward.jump:
                 check_step(src, f"步骤 {step.name} 的 forward.jump 键")
                 check_step(dst, f"步骤 {step.name} 的 forward.jump 值")
-                if src in redirects:
-                    raise RecipeError(f"{where}: {src!r} 同时出现在 jump 和 redirect 里，跳转冲突")
-                jumps[src] = dst
+                add_jump(src, dst)
             for src, dst in step.forward.redirect:
                 check_step(src, f"步骤 {step.name} 的 forward.redirect 键")
                 check_step(dst, f"步骤 {step.name} 的 forward.redirect 值")
-                if src in jumps:
-                    raise RecipeError(f"{where}: {src!r} 同时出现在 jump 和 redirect 里，跳转冲突")
-                redirects[src] = dst
+                add_redirect(src, dst)
+            for src in step.forward.back:
+                check_step(src, f"步骤 {step.name} 的 forward.back")
+                add_jump(src, step.name)
+            for src in step.forward.reback:
+                check_step(src, f"步骤 {step.name} 的 forward.reback")
+                add_redirect(src, step.name)
         return jumps, redirects
-
-    # ----------------------------------------------------------------- step
 
     # ----------------------------------------------------------------- step
 
@@ -824,6 +1157,8 @@ class RecipeRunner:
         recipe: Recipe,
         job: Job,
         data: list[Any],
+        params: dict[str, Any],
+        globals_: dict[str, Any],
         cwd: Path,
         stack: tuple[Path, ...],
         env: dict[str, str] | None = None,
@@ -831,7 +1166,15 @@ class RecipeRunner:
         """执行一个步骤；有 linkup 时和联动的步骤并发执行。"""
         if not linked:
             self._run_step_own(
-                step, recipe=recipe, job=job, data=data, cwd=cwd, stack=stack, env=env
+                step,
+                recipe=recipe,
+                job=job,
+                data=data,
+                params=params,
+                globals_=globals_,
+                cwd=cwd,
+                stack=stack,
+                env=env,
             )
             return
 
@@ -849,6 +1192,8 @@ class RecipeRunner:
                         recipe=recipe,
                         job=job,
                         data=data,
+                        params=params,
+                        globals_=globals_,
                         cwd=cwd,
                         stack=stack,
                         env=env,
@@ -886,6 +1231,8 @@ class RecipeRunner:
         recipe: Recipe,
         job: Job,
         data: list[Any],
+        params: dict[str, Any],
+        globals_: dict[str, Any],
         cwd: Path,
         stack: tuple[Path, ...],
         env: dict[str, str] | None = None,
@@ -902,7 +1249,10 @@ class RecipeRunner:
         ns = self._get_expr_ns(recipe) if (eval_run or eval_call) else None
 
         for command in step.run:
-            parts = [self._subst(token, data, recipe, step) for token in command]
+            parts = [
+                self._subst(token, data, params, globals_, recipe, step)
+                for token in command
+            ]
             if eval_run:
                 parts = [substitute_in_value(p, ns, True) for p in parts]
             if not parts or not str(parts[0]):
@@ -910,10 +1260,24 @@ class RecipeRunner:
             line = " ".join(str(part) for part in parts)
             self._exec_shell(line, cwd=cwd, recipe=recipe, step=step, env=step_env)
 
-        for rel_path, args in step.call:
+        for rel_path, raw_params in step.call:
+            call_params = dict(globals_)
+            call_params.update(
+                self._resolve_params(
+                    raw_params,
+                    data=data,
+                    params=params,
+                    globals_=globals_,
+                    recipe=recipe,
+                    step=step,
+                )
+            )
             if eval_call:
                 rel_path = str(substitute_in_value(rel_path, ns, True))
-                args = substitute_in_value(args, ns, True)
+                call_params = {
+                    key: substitute_in_value(value, ns, True)
+                    for key, value in call_params.items()
+                }
             target = (recipe.dir / rel_path).resolve()
             if target.is_dir():
                 for name in RECIPE_NAMES:
@@ -926,11 +1290,13 @@ class RecipeRunner:
                         f"{recipe.path.name} 步骤 {step.name}: 目录 {target} 中没有配方文件"
                     )
             logger.info(
-                "  * 调用 {} args={}", target, json.dumps(list(args), ensure_ascii=False)
+                "  * 调用 {} params={}",
+                target,
+                json.dumps(call_params, ensure_ascii=False, default=str),
             )
             self._run_recipe(
                 target,
-                args=list(args),
+                globals_=call_params,
                 workdir=cwd,
                 stack=stack + (recipe.path,),
                 top=False,
@@ -941,8 +1307,71 @@ class RecipeRunner:
 
     # ----------------------------------------------------------------- 工具
 
-    def _subst(self, token: Any, data: list[Any], recipe: Recipe, step: Step) -> Any:
-        """把 run 中的数字下标替换成 data 中的数据。"""
+    def _resolve_ref(
+        self,
+        ref: dict[str, Any],
+        *,
+        data: list[Any],
+        params: dict[str, Any],
+        globals_: dict[str, Any],
+        recipe: Recipe,
+        step: Step,
+    ) -> Any:
+        """解析 ``{"data": n}`` / ``{"params": name}`` / ``{"global": name}``。"""
+        key, name = next(iter(ref.items()))
+        if key == "data":
+            return self._subst(name, data, params, globals_, recipe, step)
+        source = params if key == "params" else globals_
+        if name not in source:
+            raise RecipeError(
+                f"{recipe.path.name} 步骤 {step.name}: {key} 中不存在参数 {name!r}"
+            )
+        return source[name]
+
+    def _resolve_params(
+        self,
+        raw: tuple[tuple[str, Any], ...],
+        *,
+        data: list[Any],
+        params: dict[str, Any],
+        globals_: dict[str, Any],
+        recipe: Recipe,
+        step: Step,
+    ) -> dict[str, Any]:
+        """把参数表里的引用对象解析成实际值。"""
+        result: dict[str, Any] = {}
+        for name, value in raw:
+            if is_value_ref(value):
+                value = self._resolve_ref(
+                    value,
+                    data=data,
+                    params=params,
+                    globals_=globals_,
+                    recipe=recipe,
+                    step=step,
+                )
+            result[name] = value
+        return result
+
+    def _subst(
+        self,
+        token: Any,
+        data: list[Any],
+        params: dict[str, Any],
+        globals_: dict[str, Any],
+        recipe: Recipe,
+        step: Step,
+    ) -> Any:
+        """把 run 中的数字下标 / data / params / global 引用替换成实际值。"""
+        if is_value_ref(token):
+            return self._resolve_ref(
+                token,
+                data=data,
+                params=params,
+                globals_=globals_,
+                recipe=recipe,
+                step=step,
+            )
         if isinstance(token, bool) or not isinstance(token, int):
             return token
         if not 0 <= token < len(data):
